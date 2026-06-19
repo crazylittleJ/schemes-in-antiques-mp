@@ -91,8 +91,8 @@ export default function App() {
       else if (e.kind === 'TEAMMATE') { const who = e.name || e.playerId; setTeammate(`${who}(${e.role})`); setPrivLog((l) => [...l, `${who} 是${e.role}(你的隊友)`]); }
       else if (e.kind === 'IDENTIFY_RESULT') setPrivLog((l) => [...l, `鑑定 ${ANIMALS[e.animalId]} → ${RESULT_TEXT[e.result]}`]);
       else if (e.kind === 'FACTION_RESULT') { const tn = roomRef.current?.state?.names?.get?.(e.targetId) || e.targetId; setPrivLog((l) => [...l, `${tn} 的陣營:${e.camp === 'GOOD' ? '好人' : '壞人'}`]); }
-      else if (e.kind === 'GANKED') { setGankedTurn(true); setPrivLog((l) => [...l, '你被藥不然偷襲了!本回合無法行動。']); }
-      else if (e.kind === 'BLOCKED_ROUND') { setCannotId(true); roomRef.current?.send('action', { type: 'SKIP_IDENTIFY' }); setPrivLog((l) => [...l, '本回合無法鑑寶(系統判定)。']); }
+      else if (e.kind === 'GANKED') setGankedTurn(true);
+      else if (e.kind === 'BLOCKED_ROUND') setCannotId(true);
     });
     room.onLeave(() => { sessionStorage.removeItem('gudong_reconnect'); });
   }
@@ -107,17 +107,14 @@ export default function App() {
     } else setConnecting(false);
   }, []);
 
-  // 離開自己的鑑定步驟就清掉「無法鑑定」提示
-  useEffect(() => {
-    const mine = snap && snap.phase === 'TURN' && snap.currentPlayer === mySeat && snap.subStep === 'AWAIT_IDENTIFY';
-    if (!mine && cannotId) setCannotId(false);
-  }, [snap?.phase, snap?.currentPlayer, snap?.subStep, mySeat, cannotId]);
-
-  // 不是我的回合就清掉「被偷襲」提示
+  // 我的回合結束就清掉「無法鑑寶 / 被偷襲」提示
   useEffect(() => {
     const myTurnNow = snap && snap.phase === 'TURN' && snap.currentPlayer === mySeat;
-    if (!myTurnNow && gankedTurn) setGankedTurn(false);
-  }, [snap?.phase, snap?.currentPlayer, mySeat, gankedTurn]);
+    if (!myTurnNow) {
+      if (cannotId) setCannotId(false);
+      if (gankedTurn) setGankedTurn(false);
+    }
+  }, [snap?.phase, snap?.currentPlayer, mySeat, cannotId, gankedTurn]);
 
   async function join() {
     try {
@@ -293,7 +290,13 @@ function TurnUI({ s, role, notActed, others, nameOf, send, cannotId }: any) {
 
   if (s.subStep === 'AWAIT_IDENTIFY') {
     if (cannotId) {
-      return <div style={{ color: '#7a5b00' }}>本回合無法鑑寶,正在跳至派票…</div>;
+      return notActed.length === 0
+        ? <div>本回合無法鑑寶,你是最後一位 — <button style={btn} onClick={() => send({ type: 'SKIP_IDENTIFY' })}>結束回合</button></div>
+        : <div>本回合無法鑑寶,直接選擇下一位派票:
+            {notActed.map((p: string) => (
+              <button key={p} style={mini} onClick={() => { send({ type: 'SKIP_IDENTIFY' }); send({ type: 'PASS_TURN', targetId: p }); }}>{nameOf(p)}</button>
+            ))}
+          </div>;
     }
     if (role === '方震') {
       return <div>查看一位玩家的陣營:{others.map((p: string) => (
@@ -384,10 +387,16 @@ function VoteUI({ s, mySeat, send }: any) {
 
 function IdentityUI({ s, role, others, nameOf, send }: any) {
   const [done, setDone] = useState(false);
+  const GOOD = ['許願', '方震', '黃煙煙', '木戶加奈', '姬云浮'];
   let prompt = '', type = '';
   if (role === '老朝奉') { prompt = '你認為誰是許願?'; type = 'GUESS_XU'; }
   else if (role === '藥不然') { prompt = '你認為誰是方震?'; type = 'GUESS_FANG'; }
-  else { prompt = '你認為誰是老朝奉?'; type = 'GUESS_LAO'; }
+  else if (GOOD.includes(role)) { prompt = '你認為誰是老朝奉?'; type = 'GUESS_LAO'; }
+  // 鄭國渠(壞人方,非老朝奉/藥不然)本階段無需猜測,其投票不計入好人方
+
+  if (type === '') {
+    return <div style={box}><b>身份揭露</b><p style={{ color: '#888' }}>你本階段無需猜測,等待其他人揭露…</p></div>;
+  }
   return (
     <div style={box}>
       <b>身份揭露:{prompt}</b>
