@@ -65,6 +65,7 @@ export default function App() {
   const [connecting, setConnecting] = useState(true);
   const [showHelp, setShowHelp] = useState(false);
   const [cannotId, setCannotId] = useState(false); // 本輪被系統封鎖鑑定
+  const [gankedTurn, setGankedTurn] = useState(false); // 本回合被藥不然偷襲
 
   // 表單
   const [name, setName] = useState('');
@@ -90,8 +91,8 @@ export default function App() {
       else if (e.kind === 'TEAMMATE') { const who = e.name || e.playerId; setTeammate(`${who}(${e.role})`); setPrivLog((l) => [...l, `${who} 是${e.role}(你的隊友)`]); }
       else if (e.kind === 'IDENTIFY_RESULT') setPrivLog((l) => [...l, `鑑定 ${ANIMALS[e.animalId]} → ${RESULT_TEXT[e.result]}`]);
       else if (e.kind === 'FACTION_RESULT') { const tn = roomRef.current?.state?.names?.get?.(e.targetId) || e.targetId; setPrivLog((l) => [...l, `${tn} 的陣營:${e.camp === 'GOOD' ? '好人' : '壞人'}`]); }
-      else if (e.kind === 'GANKED') setPrivLog((l) => [...l, '你被藥不然偷襲了!本回合無法行動。']);
-      else if (e.kind === 'BLOCKED_ROUND') { setCannotId(true); setPrivLog((l) => [...l, '本輪你無法鑑定(由系統決定)。']); }
+      else if (e.kind === 'GANKED') { setGankedTurn(true); setPrivLog((l) => [...l, '你被藥不然偷襲了!本回合無法行動。']); }
+      else if (e.kind === 'BLOCKED_ROUND') { setCannotId(true); roomRef.current?.send('action', { type: 'SKIP_IDENTIFY' }); setPrivLog((l) => [...l, '本回合無法鑑寶(系統判定)。']); }
     });
     room.onLeave(() => { sessionStorage.removeItem('gudong_reconnect'); });
   }
@@ -111,6 +112,12 @@ export default function App() {
     const mine = snap && snap.phase === 'TURN' && snap.currentPlayer === mySeat && snap.subStep === 'AWAIT_IDENTIFY';
     if (!mine && cannotId) setCannotId(false);
   }, [snap?.phase, snap?.currentPlayer, snap?.subStep, mySeat, cannotId]);
+
+  // 不是我的回合就清掉「被偷襲」提示
+  useEffect(() => {
+    const myTurnNow = snap && snap.phase === 'TURN' && snap.currentPlayer === mySeat;
+    if (!myTurnNow && gankedTurn) setGankedTurn(false);
+  }, [snap?.phase, snap?.currentPlayer, mySeat, gankedTurn]);
 
   async function join() {
     try {
@@ -217,6 +224,16 @@ export default function App() {
 
       {s.phase === 'TURN' && (
         <div style={box}>
+          {myTurn && gankedTurn && (
+            <div style={{ background: '#fde2e2', border: '1px solid #f5a3a3', color: '#a11', borderRadius: 6, padding: '8px 10px', marginBottom: 8, fontWeight: 700 }}>
+              🚫 你被藥不然偷襲了!本回合無法鑑定、無法發動能力,直接派票即可。
+            </div>
+          )}
+          {myTurn && cannotId && !gankedTurn && (
+            <div style={{ background: '#fff3d6', border: '1px solid #e6c14d', color: '#7a5b00', borderRadius: 6, padding: '8px 10px', marginBottom: 8, fontWeight: 700 }}>
+              ⛔ 本回合無法鑑寶(系統判定:木戶加奈/黃煙煙的封鎖輪,或姬云浮被偷襲後),直接選擇下一位派票即可。
+            </div>
+          )}
           {myTurn ? <TurnUI s={s} role={role} mySeat={mySeat} notActed={notActed} others={others} nameOf={nameOf} send={send} cannotId={cannotId} />
             : <span style={{ color: '#888' }}>輪到 {nameOf(s.currentPlayer)} 行動…</span>}
         </div>
@@ -260,6 +277,7 @@ export default function App() {
 
       {/* 公開訊息 + 私密歷史 */}
       <div style={{ color: '#999', fontSize: 13, marginTop: 8 }}>📢 {s.logLine}</div>
+      {privLog.length > 0 && <div style={{ fontSize: 13, marginTop: 4 }}>📝 {privLog[privLog.length - 1]}</div>}
       <details style={{ marginTop: 8 }}>
         <summary style={{ cursor: 'pointer', color: '#888' }}>我的紀錄</summary>
         {privLog.map((l, i) => <div key={i} style={{ fontSize: 13 }}>{l}</div>)}
@@ -275,8 +293,7 @@ function TurnUI({ s, role, notActed, others, nameOf, send, cannotId }: any) {
 
   if (s.subStep === 'AWAIT_IDENTIFY') {
     if (cannotId) {
-      return <div>本輪你<b>無法鑑定</b>(由系統決定,木戶加奈/黃煙煙的封鎖輪或姬云浮被偷襲後)。
-        <button style={btn} onClick={() => send({ type: 'SKIP_IDENTIFY' })}>下一步</button></div>;
+      return <div style={{ color: '#7a5b00' }}>本回合無法鑑寶,正在跳至派票…</div>;
     }
     if (role === '方震') {
       return <div>查看一位玩家的陣營:{others.map((p: string) => (

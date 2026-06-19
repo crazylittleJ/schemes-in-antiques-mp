@@ -13,6 +13,11 @@ export function camp(role: RoleId): Camp {
   return GOOD_ROLES.includes(role) ? 'GOOD' : 'BAD';
 }
 
+// 有「主動發動」能力的角色(其餘為被動或無能力)
+function hasActiveAbility(role: RoleId): boolean {
+  return role === '老朝奉' || role === '藥不然' || role === '鄭國渠';
+}
+
 function rolesForCount(n: number): RoleId[] {
   // 6:移除 姬云浮、鄭國渠 / 7:移除 姬云浮 / 8:全部
   if (n === 6) return ['許願', '方震', '黃煙煙', '木戶加奈', '老朝奉', '藥不然'];
@@ -305,7 +310,9 @@ export function applyAction(prev: GameState, action: Action): ApplyResult {
       if (!isCurrent(action.player) || t.subStep !== 'AWAIT_IDENTIFY') return err(prev, '現在不是你的鑑定步驟');
       // 只有真的被系統封鎖鑑定的玩家(木戶/黃的封鎖輪、姬云浮永久失能)才能略過
       if (canIdentifyThisTurn(s, action.player)) return err(prev, '你本輪可以鑑定,請選擇獸首');
-      t.subStep = 'AWAIT_ABILITY';
+      // 被封鎖者皆無主動能力 → 直接到派票,連能力步驟一併略過
+      t.subStep = hasActiveAbility(s.secret.roles[action.player]) ? 'AWAIT_ABILITY' : 'AWAIT_PASS';
+      maybeEndRoundTurn(s);
       return { state: s, effects, ok: true };
     }
 
@@ -424,3 +431,12 @@ export function applyAction(prev: GameState, action: Action): ApplyResult {
 
 // 給伺服器層用的小工具
 export { playerOfRole, goodPlayers, GOOD_ROLES, BAD_ROLES };
+
+// 查詢某玩家「當前回合」的特殊狀態(供重連時補送提示)。偷襲優先於封鎖。
+export function turnStatusFor(state: GameState, seat: PlayerId): 'GANKED' | 'BLOCKED' | null {
+  const t = state.public.turn;
+  if (state.public.phase !== 'TURN' || t.currentPlayer !== seat) return null;
+  if (state.secret.turnGanked && t.subStep === 'AWAIT_PASS') return 'GANKED';
+  if (t.subStep === 'AWAIT_IDENTIFY' && !canIdentifyThisTurn(state, seat)) return 'BLOCKED';
+  return null;
+}

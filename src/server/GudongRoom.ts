@@ -1,6 +1,6 @@
 import { Room, Client } from 'colyseus';
 import { GudongState, ProtectedEntrySchema } from './schema';
-import { setupGame, applyAction } from '../engine/engine';
+import { setupGame, applyAction, turnStatusFor } from '../engine/engine';
 import { Action, Effect, GameState, PlayerId } from '../engine/types';
 
 interface JoinOptions { name?: string; password?: string; playerCount?: number; }
@@ -101,7 +101,9 @@ export class GudongRoom extends Room<GudongState> {
       const payload: Effect = e.kind === 'TEAMMATE'
         ? { ...e, name: this.state.names.get(e.playerId) ?? e.playerId }
         : e;
-      if (payload.kind !== 'BLOCKED_ROUND') this.privateLog[payload.to]?.push(payload); // BLOCKED_ROUND 為當回合短暫提示,不入重連歷史
+      // 偷襲/封鎖為當回合短暫提示,不入重連歷史(改由 sendTurnStatus 依當前狀態補送)
+      const transient = payload.kind === 'BLOCKED_ROUND' || payload.kind === 'GANKED';
+      if (!transient) this.privateLog[payload.to]?.push(payload);
       const sid = this.seatToSession(payload.to);
       if (sid) {
         const c = this.clients.find((cl) => cl.sessionId === sid);
@@ -166,6 +168,7 @@ export class GudongRoom extends Room<GudongState> {
         if (this.engine) this.engine.public.connected[seat] = true;
         client.send('seat', { seatId: seat, isHost: seat === this.hostSeat });
         for (const e of this.privateLog[seat] ?? []) client.send('effect', e); // 補送私訊歷史
+        this.sendTurnStatus(client, seat); // 依當前回合補送「被偷襲 / 無法鑑定」提示
       }
     } catch {
       // 超時未回:保留座位(回合制,可由其他人代為推進);此處不移除
@@ -215,6 +218,14 @@ export class GudongRoom extends Room<GudongState> {
 
   private sendError(client: Client, message: string) {
     client.send('error', { message });
+  }
+
+  // 依當前引擎狀態,補送該玩家「被偷襲 / 本回合無法鑑定」的提示(重連用)
+  private sendTurnStatus(client: Client, seat: PlayerId) {
+    if (!this.engine) return;
+    const status = turnStatusFor(this.engine, seat);
+    if (status === 'GANKED') client.send('effect', { to: seat, kind: 'GANKED' });
+    else if (status === 'BLOCKED') client.send('effect', { to: seat, kind: 'BLOCKED_ROUND', round: this.engine.public.roundIndex });
   }
 
   private seatToSession(seat: PlayerId): string | null {

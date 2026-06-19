@@ -1,4 +1,4 @@
-import { setupGame, applyAction, resolveAppraisal, camp, playerOfRole } from './engine';
+import { setupGame, applyAction, resolveAppraisal, camp, playerOfRole, turnStatusFor } from './engine';
 import { Action, GameState, PlayerId } from './types';
 
 // 種子亂數,確保可重現
@@ -200,12 +200,41 @@ console.log('# SKIP_IDENTIFY 防呆');
   state.public.turn.currentPlayer = mu;
   state.public.turn.subStep = 'AWAIT_IDENTIFY';
   const ok = applyAction(state, { type: 'SKIP_IDENTIFY', player: mu });
-  assert(ok.ok && ok.state.public.turn.subStep === 'AWAIT_ABILITY', '封鎖輪可略過鑑定');
+  assert(ok.ok && ok.state.public.turn.subStep === 'AWAIT_PASS', '封鎖輪略過鑑定後直接到派票(木戶無主動能力)');
   // 非封鎖輪 → 不可略過
   state.public.roundIndex = (br + 1) % 3;
   state.public.turn.subStep = 'AWAIT_IDENTIFY';
   const bad = applyAction(state, { type: 'SKIP_IDENTIFY', player: mu });
   assert(!bad.ok, '非封鎖輪不能略過鑑定');
+}
+
+// ── 7. turnStatusFor:偷襲優先於封鎖 ───────────────────────────────────────
+console.log('# 偷襲優先於封鎖');
+{
+  const seats = ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'];
+  let { state } = setupGame(seats, mulberry32(8));
+  const mu = playerOfRole(state, '木戶加奈')!;
+  const br = state.secret.blockedRound[mu];
+  // 純封鎖:輪到木戶、封鎖輪、未被偷襲 → BLOCKED
+  state.public.roundIndex = br;
+  state.public.turn.currentPlayer = mu;
+  state.public.turn.subStep = 'AWAIT_IDENTIFY';
+  state.secret.turnGanked = false;
+  assert(turnStatusFor(state, mu) === 'BLOCKED', '封鎖輪未被偷襲 → BLOCKED');
+  // 同時被偷襲:onTurnBegin 走偷襲分支(AWAIT_PASS + turnGanked)→ GANKED 優先於封鎖
+  let s2 = setupGame(seats, mulberry32(8)).state;
+  s2.public.roundIndex = br;            // 木戶的封鎖輪
+  s2.secret.pendingGank = [mu];         // 同時被偷襲
+  const starter = seats.find((p) => p !== mu)!;
+  s2.public.turn.currentPlayer = starter;
+  s2.public.turn.startPlayer = starter;
+  s2.public.turn.subStep = 'AWAIT_PASS';
+  s2.public.turn.actedPlayers = [];     // 還有其他人未行動,回合不會立刻結束
+  const r = applyAction(s2, { type: 'PASS_TURN', player: starter, targetId: mu });
+  s2 = r.state;
+  assert(r.ok, '派票給木戶應成功');
+  assert(turnStatusFor(s2, mu) === 'GANKED', '同時被偷襲與封鎖 → 優先 GANKED');
+  assert(s2.public.turn.subStep === 'AWAIT_PASS', '被偷襲者直接進入派票步驟');
 }
 
 console.log(`\n結果:${pass} passed, ${fail} failed`);
