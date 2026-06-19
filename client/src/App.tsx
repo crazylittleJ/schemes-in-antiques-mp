@@ -61,6 +61,7 @@ export default function App() {
   const [privLog, setPrivLog] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [connecting, setConnecting] = useState(true);
+  const [showHelp, setShowHelp] = useState(false);
 
   // 表單
   const [name, setName] = useState('');
@@ -124,6 +125,7 @@ export default function App() {
   if (!roomRef.current || !snap) {
     return (
       <Shell>
+        {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
         <h1>古董局中局</h1>
         <p style={{ color: '#888' }}>第一位進房者即房主,設定密碼與人數;其餘人輸入相同密碼加入。</p>
         <Field label="暱稱"><input value={name} onChange={(e) => setName(e.target.value)} /></Field>
@@ -134,6 +136,7 @@ export default function App() {
           </select>
         </Field>
         <button style={btn} onClick={join}>進入房間</button>
+        <button style={textBtn} onClick={() => setShowHelp(true)}>遊戲說明</button>
         {error && <p style={{ color: 'crimson' }}>{error}</p>}
       </Shell>
     );
@@ -147,10 +150,12 @@ export default function App() {
 
   return (
     <Shell>
+      {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
         <h2 style={{ margin: 0 }}>古董局中局</h2>
         <span style={{ color: '#888' }}>
           {phaseLabel(s.phase)} · 第 {s.roundIndex + 1} 輪
+          <button style={textBtn} onClick={() => setShowHelp(true)}>說明</button>
           <button style={textBtn} onClick={leaveGame}>離開</button>
           {isHost && <button style={textBtn} onClick={closeRoom}>關閉房間</button>}
         </span>
@@ -327,6 +332,47 @@ function IdentityUI({ s, role, others, nameOf, send }: any) {
   );
 }
 
+function HelpModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div style={overlay} onClick={onClose}>
+      <div style={modal} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, background: '#fff', paddingBottom: 8 }}>
+          <h2 style={{ margin: 0 }}>遊戲說明</h2>
+          <button style={btn} onClick={onClose}>關閉</button>
+        </div>
+
+        <h3>遊戲規則</h3>
+        <p><b>目標:</b>好人方「許願陣營」要保護到 6 個真品(湊滿 6 分)獲勝;否則壞人方「老朝奉陣營」獲勝。十二獸首中有 6 真 6 假,分 3 輪鑑定。</p>
+        <p><b>陣營:</b>只有老朝奉與藥不然互相認識隊友;鄭國渠雖是壞人但不知隊友,好人之間也互不相認。人數:6 人移除姬云浮與鄭國渠;7 人移除姬云浮;8 人全角色。</p>
+        <p><b>每輪流程:</b>系統抽出 4 個獸首(必定 2 真 2 假)。輪到你時依序:① 選一個獸首鑑定(許願可鑑定兩個);② 發動或不發動角色能力;③ 把行動權派給本輪尚未行動的人。全員行動完後,從尾家左手邊起順時針<b>發言</b>,接著同時<b>投票</b>決定保護哪些獸首(籌碼可任意分配,沒用完留到下一輪),最後<b>開票</b>:最高票兩個獸首被保護,其中第二高票當場公開真偽,第一高票暫不公開。平票時生肖排序在前者視為較高。</p>
+        <p><b>角色能力:</b></p>
+        <ul style={{ marginTop: 0 }}>
+          <li>許願(好人首領):一回合可鑑定兩個寶物。</li>
+          <li>方震:無鑑寶能力,但每回合可查看一位玩家的陣營(好/壞)。</li>
+          <li>木戶加奈 / 黃煙煙:隨機某一輪無法鑑定。</li>
+          <li>姬云浮:鑑定不受老朝奉影響;但若被藥不然偷襲,將永久無法鑑定。</li>
+          <li>老朝奉(壞人首領):發動後,順位在他之後的好人鑑定真假互換(本質不變)。</li>
+          <li>藥不然:發動後偷襲一名玩家,使其下回合無法行動;偷襲方震會連帶偷襲許願。</li>
+          <li>鄭國渠:發動後覆蓋一個寶物,之後鑑定該寶物者只看到「無法鑑定」。</li>
+        </ul>
+        <p><b>計分(好人方):</b>每保護一個真品 +1;許願沒被老朝奉找到 +2;方震沒被藥不然找到 +1;過半(含半數)好人找到老朝奉 +1。總分 ≥ 6 好人勝,否則壞人勝。</p>
+
+        <h3>房間閒置時間限制</h3>
+        <p>房間若 30 分鐘內沒有任何動作(加入、行動、開始),會自動關閉,所有人退回大廳。這是為了不讓沒人玩的房間一直佔用伺服器。只要遊戲還在進行、有人操作就會持續重置這個計時。</p>
+        <p>另外:免費伺服器閒置約 15 分鐘會休眠,因此<b>很久沒人用時,第一個連入的人需等約一分鐘</b>把伺服器喚醒;之後只要有人連著就不會休眠。</p>
+
+        <h3>房主與關閉房間</h3>
+        <p>第一個進房的人是<b>房主</b>,只有房主能按「開始遊戲」。房主右上角有「關閉房間」鈕,按下會把所有人踢出並結束這局——卡關或想重來時用它最快。若房主自己離開,房主身分會自動轉給下一位仍在線的玩家。</p>
+
+        <h3>暫離與重連</h3>
+        <p><b>短暫斷線 / 重整 / 鎖屏:</b>伺服器會幫你保留座位 60 秒。在這段時間內回來(或重新整理頁面),會自動回到原座位,並補回你的身份與紀錄——所以中途網路抖一下、不小心重整都沒關係。</p>
+        <p><b>注意:</b>重連資訊存在這個分頁裡,<b>完全關掉分頁</b>就會清掉,無法再自動回座。手機鎖屏、切到別的 App 通常分頁還在,不受影響。</p>
+        <p><b>主動「離開」:</b>在大廳離開會直接釋放座位,讓別人能補進;遊戲<b>進行中</b>離開則會保留座位、標記為離線(避免破壞回合資料)。若剛好輪到離線的人,回合會卡住,這時請房主「關閉房間」重開一局。</p>
+      </div>
+    </div>
+  );
+}
+
 function phaseLabel(p: string) {
   return ({ LOBBY: '大廳', ROUND_START: '回合開始', TURN: '鑑定回合', SPEECH: '發言', VOTE: '投票', REVEAL: '開票', IDENTITY_REVEAL: '身份揭露', SCORING: '計分', GAME_END: '結束' } as any)[p] || p;
 }
@@ -342,3 +388,5 @@ const btn: React.CSSProperties = { background: '#2d6cdf', color: '#fff', border:
 const mini: React.CSSProperties = { background: '#fff', border: '1px solid #ccc', borderRadius: 6, padding: '5px 9px', margin: 3, cursor: 'pointer' };
 const miniOn: React.CSSProperties = { ...mini, background: '#2d6cdf', color: '#fff', border: '1px solid #2d6cdf' };
 const textBtn: React.CSSProperties = { marginLeft: 10, background: 'none', border: 'none', color: '#2d6cdf', cursor: 'pointer', fontSize: 13, padding: 0 };
+const overlay: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: 16, overflowY: 'auto', zIndex: 100 };
+const modal: React.CSSProperties = { background: '#fff', borderRadius: 10, padding: 20, maxWidth: 560, width: '100%', maxHeight: '90vh', overflowY: 'auto', lineHeight: 1.7, color: '#222' };
