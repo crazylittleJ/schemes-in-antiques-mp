@@ -38,7 +38,11 @@ function playFullGame(seed: number) {
       const sub = state.public.turn.subStep;
 
       if (sub === 'AWAIT_IDENTIFY') {
-        if (role === '方震') {
+        const blocked = (role === '木戶加奈' || role === '黃煙煙') && state.secret.blockedRound[cur] === round;
+        const jiDead = role === '姬云浮' && state.secret.jiPermanentlyDisabled;
+        if (blocked || jiDead) {
+          state = apply(state, { type: 'SKIP_IDENTIFY', player: cur });
+        } else if (role === '方震') {
           const target = seats.find((p) => p !== cur)!;
           state = apply(state, { type: 'VIEW_FACTION', player: cur, targetId: target });
         } else {
@@ -79,6 +83,9 @@ function playFullGame(seed: number) {
       const chips = state.public.chips[p];
       state = apply(state, { type: 'SUBMIT_VOTE', player: p, allocation: { [animals[0]]: Math.min(1, chips), [animals[1]]: Math.max(0, chips - 1) } });
     }
+
+    assert(state.public.phase === 'REVEAL', `seed ${seed} r${round}: 投票後應停在 REVEAL`);
+    state = apply(state, { type: 'CONTINUE', player: seats[0] }); // 看完開票結果後繼續
   }
 
   // 三輪後:GAME_END(直接勝)或 IDENTITY_REVEAL
@@ -179,6 +186,26 @@ console.log('# 木戶/黃 封鎖輪');
   const a2 = state.secret.roundLayout[(br + 1) % 3][0];
   const expect = state.secret.treasures[a2].isReal ? 'REAL' : 'FAKE';
   assert(resolveAppraisal(state, mu, a2) === expect, '非封鎖輪可正常鑑定');
+}
+
+// ── 6. SKIP_IDENTIFY:只有被封鎖者能略過鑑定 ─────────────────────────────────
+console.log('# SKIP_IDENTIFY 防呆');
+{
+  const seats = ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'];
+  let { state } = setupGame(seats, mulberry32(8));
+  const mu = playerOfRole(state, '木戶加奈')!;
+  const br = state.secret.blockedRound[mu];
+  // 封鎖輪、輪到木戶 → 可略過
+  state.public.roundIndex = br;
+  state.public.turn.currentPlayer = mu;
+  state.public.turn.subStep = 'AWAIT_IDENTIFY';
+  const ok = applyAction(state, { type: 'SKIP_IDENTIFY', player: mu });
+  assert(ok.ok && ok.state.public.turn.subStep === 'AWAIT_ABILITY', '封鎖輪可略過鑑定');
+  // 非封鎖輪 → 不可略過
+  state.public.roundIndex = (br + 1) % 3;
+  state.public.turn.subStep = 'AWAIT_IDENTIFY';
+  const bad = applyAction(state, { type: 'SKIP_IDENTIFY', player: mu });
+  assert(!bad.ok, '非封鎖輪不能略過鑑定');
 }
 
 console.log(`\n結果:${pass} passed, ${fail} failed`);

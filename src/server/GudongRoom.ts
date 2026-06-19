@@ -97,11 +97,15 @@ export class GudongRoom extends Room<GudongState> {
   // 把引擎的私訊副作用發給對應的 client,並記錄供重連補送
   private routeEffects(effects: Effect[]) {
     for (const e of effects) {
-      this.privateLog[e.to]?.push(e);
-      const sid = this.seatToSession(e.to);
+      // 隊友資訊補上對方的玩家名稱(讓藥不然/老朝奉知道是「哪一位」)
+      const payload: Effect = e.kind === 'TEAMMATE'
+        ? { ...e, name: this.state.names.get(e.playerId) ?? e.playerId }
+        : e;
+      if (payload.kind !== 'BLOCKED_ROUND') this.privateLog[payload.to]?.push(payload); // BLOCKED_ROUND 為當回合短暫提示,不入重連歷史
+      const sid = this.seatToSession(payload.to);
       if (sid) {
         const c = this.clients.find((cl) => cl.sessionId === sid);
-        if (c) c.send('effect', e);
+        if (c) c.send('effect', payload);
       }
     }
   }

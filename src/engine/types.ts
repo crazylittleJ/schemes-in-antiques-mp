@@ -81,21 +81,24 @@ export interface GameState {
 // 私訊給單一玩家的副作用(Colyseus 用 client.send 發送)
 export type Effect =
   | { to: PlayerId; kind: 'YOUR_ROLE'; role: RoleId; camp: Camp }
-  | { to: PlayerId; kind: 'TEAMMATE'; playerId: PlayerId; role: RoleId }
+  | { to: PlayerId; kind: 'TEAMMATE'; playerId: PlayerId; role: RoleId; name?: string }
   | { to: PlayerId; kind: 'IDENTIFY_RESULT'; animalId: AnimalId; result: AppraisalResult }
   | { to: PlayerId; kind: 'FACTION_RESULT'; targetId: PlayerId; camp: Camp }
   | { to: PlayerId; kind: 'GANKED' }
+  | { to: PlayerId; kind: 'BLOCKED_ROUND'; round: number }
   | { to: PlayerId; kind: 'ERROR'; message: string };
 
 export type Action =
   | { type: 'START_GAME' }
   | { type: 'IDENTIFY'; player: PlayerId; animalIds: AnimalId[] }
+  | { type: 'SKIP_IDENTIFY'; player: PlayerId }
   | { type: 'VIEW_FACTION'; player: PlayerId; targetId: PlayerId }
   | { type: 'USE_ABILITY'; player: PlayerId; targetId?: PlayerId; animalId?: AnimalId }
   | { type: 'SKIP_ABILITY'; player: PlayerId }
   | { type: 'PASS_TURN'; player: PlayerId; targetId: PlayerId }
   | { type: 'SPEECH_DONE'; player: PlayerId }
   | { type: 'SUBMIT_VOTE'; player: PlayerId; allocation: Record<AnimalId, number> }
+  | { type: 'CONTINUE'; player: PlayerId }
   | { type: 'GUESS_XU'; player: PlayerId; targetId: PlayerId }
   | { type: 'GUESS_FANG'; player: PlayerId; targetId: PlayerId }
   | { type: 'GUESS_LAO'; player: PlayerId; targetId: PlayerId };

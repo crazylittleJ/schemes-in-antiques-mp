@@ -64,6 +64,7 @@ export default function App() {
   const [error, setError] = useState('');
   const [connecting, setConnecting] = useState(true);
   const [showHelp, setShowHelp] = useState(false);
+  const [cannotId, setCannotId] = useState(false); // 本輪被系統封鎖鑑定
 
   // 表單
   const [name, setName] = useState('');
@@ -86,10 +87,11 @@ export default function App() {
     });
     room.onMessage('effect', (e: any) => {
       if (e.kind === 'YOUR_ROLE') { setRole(e.role); setPrivLog((l) => [...l, `你的身份:${e.role}`]); }
-      else if (e.kind === 'TEAMMATE') { setTeammate(`${e.role}`); setPrivLog((l) => [...l, `隊友:${e.role}`]); }
+      else if (e.kind === 'TEAMMATE') { const who = e.name || e.playerId; setTeammate(`${who}(${e.role})`); setPrivLog((l) => [...l, `${who} 是${e.role}(你的隊友)`]); }
       else if (e.kind === 'IDENTIFY_RESULT') setPrivLog((l) => [...l, `鑑定 ${ANIMALS[e.animalId]} → ${RESULT_TEXT[e.result]}`]);
-      else if (e.kind === 'FACTION_RESULT') setPrivLog((l) => [...l, `${e.targetId} 的陣營:${e.camp === 'GOOD' ? '好人' : '壞人'}`]);
+      else if (e.kind === 'FACTION_RESULT') { const tn = roomRef.current?.state?.names?.get?.(e.targetId) || e.targetId; setPrivLog((l) => [...l, `${tn} 的陣營:${e.camp === 'GOOD' ? '好人' : '壞人'}`]); }
       else if (e.kind === 'GANKED') setPrivLog((l) => [...l, '你被藥不然偷襲了!本回合無法行動。']);
+      else if (e.kind === 'BLOCKED_ROUND') { setCannotId(true); setPrivLog((l) => [...l, '本輪你無法鑑定(由系統決定)。']); }
     });
     room.onLeave(() => { sessionStorage.removeItem('gudong_reconnect'); });
   }
@@ -103,6 +105,12 @@ export default function App() {
         .catch(() => { sessionStorage.removeItem('gudong_reconnect'); setConnecting(false); });
     } else setConnecting(false);
   }, []);
+
+  // 離開自己的鑑定步驟就清掉「無法鑑定」提示
+  useEffect(() => {
+    const mine = snap && snap.phase === 'TURN' && snap.currentPlayer === mySeat && snap.subStep === 'AWAIT_IDENTIFY';
+    if (!mine && cannotId) setCannotId(false);
+  }, [snap?.phase, snap?.currentPlayer, snap?.subStep, mySeat, cannotId]);
 
   async function join() {
     try {
@@ -162,15 +170,21 @@ export default function App() {
 
       {/* 玩家列 */}
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '8px 0' }}>
-        {s.seatOrder.map((p) => (
-          <span key={p} style={{
-            padding: '4px 8px', borderRadius: 6, fontSize: 13,
-            background: p === s.currentPlayer ? '#2d6cdf' : '#eee',
-            color: p === s.currentPlayer ? '#fff' : '#333', opacity: s.connected[p] === false ? 0.4 : 1,
-          }}>
-            {p === s.hostSeat ? '👑' : ''}{nameOf(p)}{p === mySeat ? '(你)' : ''} · {s.chips[p] ?? 0}票
-          </span>
-        ))}
+        {s.seatOrder.map((p) => {
+          const isMe = p === mySeat, isCur = p === s.currentPlayer;
+          return (
+            <span key={p} style={{
+              padding: '4px 8px', borderRadius: 6, fontSize: 13,
+              background: isCur ? '#2d6cdf' : isMe ? '#fff3d6' : '#eee',
+              color: isCur ? '#fff' : '#333',
+              border: isMe ? '2px solid #f59e0b' : '2px solid transparent',
+              fontWeight: isMe ? 700 : 400,
+              opacity: s.connected[p] === false ? 0.4 : 1,
+            }}>
+              {p === s.hostSeat ? '👑' : ''}{isMe ? '🧑 ' : ''}{nameOf(p)}{isMe ? '(你)' : ''} · {s.chips[p] ?? 0}票
+            </span>
+          );
+        })}
       </div>
 
       {/* 我的私密資訊 */}
@@ -203,7 +217,7 @@ export default function App() {
 
       {s.phase === 'TURN' && (
         <div style={box}>
-          {myTurn ? <TurnUI s={s} role={role} mySeat={mySeat} notActed={notActed} others={others} nameOf={nameOf} send={send} />
+          {myTurn ? <TurnUI s={s} role={role} mySeat={mySeat} notActed={notActed} others={others} nameOf={nameOf} send={send} cannotId={cannotId} />
             : <span style={{ color: '#888' }}>輪到 {nameOf(s.currentPlayer)} 行動…</span>}
         </div>
       )}
@@ -220,7 +234,16 @@ export default function App() {
 
       {s.phase === 'VOTE' && <VoteUI s={s} mySeat={mySeat} send={send} />}
 
-      {s.phase === 'REVEAL' && <div style={box}>{s.logLine}</div>}
+      {s.phase === 'REVEAL' && (
+        <div style={box}>
+          <div>{s.logLine}</div>
+          <div style={{ marginTop: 6, color: '#555' }}>
+            目前已保護:{s.protectedList.map((pe) => `${ANIMALS[pe.animalId]}${pe.animalId in s.revealedReal ? (s.revealedReal[pe.animalId] ? '(真)' : '(假)') : ''}`).join('、')}
+          </div>
+          <button style={btn} onClick={() => send({ type: 'CONTINUE' })}>繼續</button>
+          <div style={{ color: '#888', fontSize: 12 }}>任一玩家按「繼續」即可進入下一階段。</div>
+        </div>
+      )}
 
       {s.phase === 'IDENTITY_REVEAL' && (
         <IdentityUI s={s} role={role} mySeat={mySeat} others={s.seatOrder} nameOf={nameOf} send={send} />
@@ -245,9 +268,16 @@ export default function App() {
   );
 }
 
-function TurnUI({ s, role, notActed, others, nameOf, send }: any) {
+function TurnUI({ s, role, notActed, others, nameOf, send, cannotId }: any) {
   const [picked, setPicked] = useState<number[]>([]);
+  const [abilityTarget, setAbilityTarget] = useState<string | null>(null);
+  const [coverAnimal, setCoverAnimal] = useState<number | null>(null);
+
   if (s.subStep === 'AWAIT_IDENTIFY') {
+    if (cannotId) {
+      return <div>本輪你<b>無法鑑定</b>(由系統決定,木戶加奈/黃煙煙的封鎖輪或姬云浮被偷襲後)。
+        <button style={btn} onClick={() => send({ type: 'SKIP_IDENTIFY' })}>下一步</button></div>;
+    }
     if (role === '方震') {
       return <div>查看一位玩家的陣營:{others.map((p: string) => (
         <button key={p} style={mini} onClick={() => send({ type: 'VIEW_FACTION', targetId: p })}>{nameOf(p)}</button>
@@ -265,20 +295,42 @@ function TurnUI({ s, role, notActed, others, nameOf, send }: any) {
       </div>
     );
   }
+
   if (s.subStep === 'AWAIT_ABILITY') {
-    return (
-      <div>
-        {role === '老朝奉' && <button style={mini} onClick={() => send({ type: 'USE_ABILITY' })}>發動真假互換</button>}
-        {role === '藥不然' && <span>偷襲:{s.seatOrder.map((p: string) => (
-          <button key={p} style={mini} onClick={() => send({ type: 'USE_ABILITY', targetId: p })}>{nameOf(p)}</button>
-        ))}</span>}
-        {role === '鄭國渠' && <span>覆蓋:{s.roundAnimals.map((a: number) => (
-          <button key={a} style={mini} onClick={() => send({ type: 'USE_ABILITY', animalId: a })}>{ANIMALS[a]}</button>
-        ))}</span>}
-        <button style={btn} onClick={() => send({ type: 'SKIP_ABILITY' })}>不發動</button>
-      </div>
-    );
+    if (role === '老朝奉') {
+      return <div>
+        <button style={btn} onClick={() => send({ type: 'USE_ABILITY' })}>發動真假互換</button>
+        <button style={mini} onClick={() => send({ type: 'SKIP_ABILITY' })}>不發動</button>
+      </div>;
+    }
+    if (role === '藥不然') {
+      return <div>
+        選擇偷襲對象:
+        {s.seatOrder.map((p: string) => (
+          <button key={p} style={abilityTarget === p ? miniOn : mini} onClick={() => setAbilityTarget(p)}>{nameOf(p)}</button>
+        ))}
+        <div style={{ marginTop: 6 }}>
+          <button disabled={!abilityTarget} style={btn} onClick={() => send({ type: 'USE_ABILITY', targetId: abilityTarget })}>偷襲</button>
+          <button style={mini} onClick={() => send({ type: 'SKIP_ABILITY' })}>不發動</button>
+        </div>
+      </div>;
+    }
+    if (role === '鄭國渠') {
+      return <div>
+        選擇要覆蓋的獸首:
+        {s.roundAnimals.map((a: number) => (
+          <button key={a} style={coverAnimal === a ? miniOn : mini} onClick={() => setCoverAnimal(a)}>{ANIMALS[a]}</button>
+        ))}
+        <div style={{ marginTop: 6 }}>
+          <button disabled={coverAnimal === null} style={btn} onClick={() => send({ type: 'USE_ABILITY', animalId: coverAnimal })}>覆蓋</button>
+          <button style={mini} onClick={() => send({ type: 'SKIP_ABILITY' })}>不發動</button>
+        </div>
+      </div>;
+    }
+    // 無主動能力的角色:直接下一步
+    return <div><button style={btn} onClick={() => send({ type: 'SKIP_ABILITY' })}>下一步</button></div>;
   }
+
   if (s.subStep === 'AWAIT_PASS') {
     return <div>派票給下一位:{notActed.map((p: string) => (
       <button key={p} style={mini} onClick={() => send({ type: 'PASS_TURN', targetId: p })}>{nameOf(p)}</button>
@@ -342,12 +394,13 @@ function HelpModal({ onClose }: { onClose: () => void }) {
         <h3>遊戲規則</h3>
         <p><b>目標:</b>好人方「許願陣營」要保護到 6 個真品(湊滿 6 分)獲勝;否則壞人方「老朝奉陣營」獲勝。十二獸首中有 6 真 6 假,分 3 輪鑑定。</p>
         <p><b>陣營:</b>只有老朝奉與藥不然互相認識隊友;鄭國渠雖是壞人但不知隊友,好人之間也互不相認。人數:6 人移除姬云浮與鄭國渠;7 人移除姬云浮;8 人全角色。</p>
-        <p><b>每輪流程:</b>系統抽出 4 個獸首(必定 2 真 2 假)。輪到你時依序:① 選一個獸首鑑定(許願可鑑定兩個);② 發動或不發動角色能力;③ 把行動權派給本輪尚未行動的人。全員行動完後,從尾家左手邊起順時針<b>發言</b>,接著同時<b>投票</b>決定保護哪些獸首(籌碼可任意分配,沒用完留到下一輪),最後<b>開票</b>:最高票兩個獸首被保護,其中第二高票當場公開真偽,第一高票暫不公開。平票時生肖排序在前者視為較高。</p>
+        <p><b>每輪流程:</b>系統抽出 4 個獸首(必定 2 真 2 假)。輪到你時依序:① 選一個獸首鑑定(許願可鑑定兩個);② 發動或不發動角色能力;③ 把行動權派給本輪尚未行動的人。全員行動完後,從尾家左手邊起順時針<b>發言</b>,接著同時<b>投票</b>決定保護哪些獸首(籌碼可任意分配,沒用完留到下一輪),最後<b>開票</b>:最高票兩個獸首被保護,其中第二高票當場公開真偽,第一高票暫不公開。平票時生肖排序在前者視為較高。<b>開票結果出現後,任一玩家按「繼續」即可進入下一輪 / 身份揭露。</b></p>
+        <p style={{ color: '#666', fontSize: 13 }}><b>介面標示:</b>玩家列中,👑 是房主、🧑(你)加橘框是你自己、藍底是目前行動者。主動技能(老朝奉/藥不然/鄭國渠)需先選對象再按「偷襲/覆蓋」確認,或按「不發動」;沒有主動能力的角色只會看到「下一步」。</p>
         <p><b>角色能力:</b></p>
         <ul style={{ marginTop: 0 }}>
           <li>許願(好人首領):一回合可鑑定兩個寶物。</li>
           <li>方震:無鑑寶能力,但每回合可查看一位玩家的陣營(好/壞)。</li>
-          <li>木戶加奈 / 黃煙煙:隨機某一輪無法鑑定。</li>
+          <li>木戶加奈 / 黃煙煙:被動角色,隨機某一輪會鑑定失敗——由系統決定是哪一輪,玩家無法選擇,也沒有可發動的能力。</li>
           <li>姬云浮:鑑定不受老朝奉影響;但若被藥不然偷襲,將永久無法鑑定。</li>
           <li>老朝奉(壞人首領):發動後,順位在他之後的好人鑑定真假互換(本質不變)。</li>
           <li>藥不然:發動後偷襲一名玩家,使其下回合無法行動;偷襲方震會連帶偷襲許願。</li>

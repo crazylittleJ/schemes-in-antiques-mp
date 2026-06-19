@@ -112,6 +112,12 @@ export function setupGame(seatOrder: PlayerId[], rng: RNG = Math.random): { stat
   // effects:發身份;老朝奉 ↔ 藥不然 互看
   const effects: Effect[] = [];
   for (const p of seatOrder) effects.push({ to: p, kind: 'YOUR_ROLE', role: roleMap[p], camp: camp(roleMap[p]) });
+  // 私下告知 木戶加奈 / 黃煙煙 自己的失能輪次(被動、本人可知)
+  for (const p of seatOrder) {
+    if (roleMap[p] === '木戶加奈' || roleMap[p] === '黃煙煙') {
+      effects.push({ to: p, kind: 'BLOCKED_ROUND', round: blockedRound[p] });
+    }
+  }
   const lao = playerOfRole(state, '老朝奉');
   const yao = playerOfRole(state, '藥不然');
   if (lao && yao) {
@@ -150,6 +156,7 @@ function onTurnBegin(s: GameState, p: PlayerId, effects: Effect[]) {
   } else {
     s.secret.turnGanked = false;
     s.public.turn.subStep = 'AWAIT_IDENTIFY';
+    if (!canIdentifyThisTurn(s, p)) effects.push({ to: p, kind: 'BLOCKED_ROUND', round: s.public.roundIndex });
   }
 }
 
@@ -221,11 +228,14 @@ function doReveal(s: GameState) {
   s.public.turn.startPlayer = s.public.turn.lastPlayer; // 尾家成為下一輪起始
   s.secret.pendingVotes = {};
   s.public.phase = 'REVEAL';
-  s.public.log.push(`保護 ${ANIMAL(top1)}、${ANIMAL(top2)};${ANIMAL(top2)} 為${s.public.revealedReal[top2] ? '真品' : '贗品'}。`);
+  s.public.log.push(`保護 ${ANIMAL(top1)}、${ANIMAL(top2)};${ANIMAL(top2)} 為${s.public.revealedReal[top2] ? '真品' : '贗品'}。開票完成,按「繼續」進入下一階段。`);
+}
 
+// 由 CONTINUE 觸發:看完開票結果後推進到下一輪 / 身份揭露 / 結束
+function advanceAfterReveal(s: GameState, effects: Effect[]) {
   if (s.public.roundIndex < 2) {
     s.public.roundIndex += 1;
-    enterRoundStart(s, []); // 下一輪起始已無 gank 觸發以外的私訊;保險起見傳空(下一輪起始可能被偷襲)
+    enterRoundStart(s, effects); // 下一輪起始玩家可能被偷襲,需傳遞 effects
   } else {
     const protectedRealCount = s.public.protected.filter((e) => s.secret.treasures[e.animalId].isReal).length;
     if (protectedRealCount >= 6) {
@@ -287,6 +297,14 @@ export function applyAction(prev: GameState, action: Action): ApplyResult {
       for (const a of action.animalIds) {
         effects.push({ to: action.player, kind: 'IDENTIFY_RESULT', animalId: a, result: resolveAppraisal(s, action.player, a) });
       }
+      t.subStep = 'AWAIT_ABILITY';
+      return { state: s, effects, ok: true };
+    }
+
+    case 'SKIP_IDENTIFY': {
+      if (!isCurrent(action.player) || t.subStep !== 'AWAIT_IDENTIFY') return err(prev, '現在不是你的鑑定步驟');
+      // 只有真的被系統封鎖鑑定的玩家(木戶/黃的封鎖輪、姬云浮永久失能)才能略過
+      if (canIdentifyThisTurn(s, action.player)) return err(prev, '你本輪可以鑑定,請選擇獸首');
       t.subStep = 'AWAIT_ABILITY';
       return { state: s, effects, ok: true };
     }
@@ -366,6 +384,12 @@ export function applyAction(prev: GameState, action: Action): ApplyResult {
       s.secret.pendingVotes[action.player] = { ...action.allocation };
       // 全員送出 → 開票
       if (s.public.seatOrder.every((p) => p in s.secret.pendingVotes)) doReveal(s);
+      return { state: s, effects, ok: true };
+    }
+
+    case 'CONTINUE': {
+      if (s.public.phase !== 'REVEAL') return err(prev, '現在不能繼續');
+      advanceAfterReveal(s, effects);
       return { state: s, effects, ok: true };
     }
 
