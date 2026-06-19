@@ -3,7 +3,7 @@ import { GudongState, ProtectedEntrySchema } from './schema';
 import { setupGame, applyAction, turnStatusFor } from '../engine/engine';
 import { Action, Effect, GameState, PlayerId } from '../engine/types';
 
-interface JoinOptions { name?: string; password?: string; playerCount?: number; }
+interface JoinOptions { name?: string; password?: string; playerCount?: number; slot?: number; }
 
 // 一桌一局的房間。免費層、單一房間的用法下,狀態存記憶體即可。
 export class GudongRoom extends Room<GudongState> {
@@ -11,6 +11,7 @@ export class GudongRoom extends Room<GudongState> {
 
   private password = '';
   private targetCount = 8;
+  private slot = 1;
   private hostSeat: PlayerId | null = null;
 
   private engine: GameState | null = null;            // 權威狀態(含 secret),不外送
@@ -25,9 +26,11 @@ export class GudongRoom extends Room<GudongState> {
   onCreate(options: JoinOptions) {
     this.password = options.password ?? '';
     this.targetCount = options.playerCount ?? 8;
+    this.slot = options.slot ?? 1;
     this.setState(new GudongState());
     this.state.phase = 'LOBBY';
     this.state.playerCount = this.targetCount;
+    this.updateMetadata();
     this.touch();
 
     this.onMessage('action', (client, payload: Omit<Action, 'player'>) => {
@@ -52,6 +55,8 @@ export class GudongRoom extends Room<GudongState> {
   onAuth(_client: Client, options: JoinOptions) {
     if ((options.password ?? '') !== this.password) throw new Error('密碼錯誤');
     if (this.started) throw new Error('遊戲已開始,無法加入');
+    const name = (options.name || '').trim();
+    if (name && [...this.state.names.values()].includes(name)) throw new Error('暱稱已被使用,請換一個');
     return true;
   }
 
@@ -63,9 +68,9 @@ export class GudongRoom extends Room<GudongState> {
     this.state.seatOrder.push(seat);
     this.state.names.set(seat, options.name || seat);
     this.state.connected.set(seat, true);
-    this.state.chips.set(seat, 0);
     if (this.hostSeat === null) { this.hostSeat = seat; this.state.hostSeat = seat; }
     client.send('seat', { seatId: seat, isHost: seat === this.hostSeat });
+    this.updateMetadata();
   }
 
   private startGame(host: Client) {
@@ -78,6 +83,7 @@ export class GudongRoom extends Room<GudongState> {
 
     const { state, effects } = setupGame(seats);
     this.engine = state;
+    this.updateMetadata();
     this.routeEffects(effects);
     this.sync();
   }
@@ -133,18 +139,26 @@ export class GudongRoom extends Room<GudongState> {
     replaceArray(st.speechOrder, p.speech?.order ?? []);
     st.speechPointer = p.speech?.pointer ?? -1;
 
-    for (const seat of p.seatOrder) {
-      st.chips.set(seat, p.chips[seat] ?? 0);
-      st.connected.set(seat, p.connected[seat] ?? true);
-    }
+    for (const seat of p.seatOrder) st.connected.set(seat, p.connected[seat] ?? true);
     syncBoolMap(st.revealedReal, p.revealedReal);
     syncNumMap(st.lastTally, p.lastTally ?? {});
+
+    replaceArray(st.turnOrdersJson, p.turnOrders.map((o) => o.join(',')));
+    replaceArray(st.voteRoundsJson, p.voteRounds.map((v) => JSON.stringify(v)));
+    st.endDetailJson = p.endDetail ? JSON.stringify(p.endDetail) : '';
 
     st.protectedList.clear();
     for (const e of p.protected) {
       const ps = new ProtectedEntrySchema();
       ps.animalId = e.animalId; ps.round = e.round; ps.realRevealed = e.realRevealed;
       st.protectedList.push(ps);
+    }
+
+    // 各玩家的剩餘票數為隱藏資訊 → 只私下送給本人
+    for (const seat of p.seatOrder) {
+      const sid = this.seatToSession(seat);
+      const c = sid ? this.clients.find((cl) => cl.sessionId === sid) : undefined;
+      if (c) c.send('mychips', p.chips[seat] ?? 0);
     }
   }
 
@@ -158,17 +172,20 @@ export class GudongRoom extends Room<GudongState> {
       this.state.connected.set(seat, false);
       if (this.engine) this.engine.public.connected[seat] = false;
     }
+    this.updateMetadata();
 
     if (consented) { this.handleConsentedLeave(client, seat); return; }
 
     try {
-      await this.allowReconnection(client, 60); // 給 60 秒重連
+      await this.allowReconnection(client, 800); // 給 800 秒重連(滑去看訊息/切 App 也不會掉)
       if (seat) {
         this.state.connected.set(seat, true);
         if (this.engine) this.engine.public.connected[seat] = true;
         client.send('seat', { seatId: seat, isHost: seat === this.hostSeat });
         for (const e of this.privateLog[seat] ?? []) client.send('effect', e); // 補送私訊歷史
-        this.sendTurnStatus(client, seat); // 依當前回合補送「被偷襲 / 無法鑑定」提示
+        this.sendTurnStatus(client, seat); // 依當前回合補送「被偷襲」提示
+        this.sync(); // 重連後補送一次(含私下票數)
+        this.updateMetadata();
       }
     } catch {
       // 超時未回:保留座位(回合制,可由其他人代為推進);此處不移除
@@ -187,13 +204,13 @@ export class GudongRoom extends Room<GudongState> {
       if (i >= 0) this.state.seatOrder.splice(i, 1);
       this.state.names.delete(seat);
       this.state.connected.delete(seat);
-      this.state.chips.delete(seat);
       delete this.privateLog[seat];
     } else {
       // 進行中:保留座位但標記永久離線(避免破壞回合資料)
       this.state.connected.set(seat, false);
       if (this.engine) this.engine.public.connected[seat] = false;
     }
+    this.updateMetadata();
     this.touch();
   }
 
@@ -220,12 +237,20 @@ export class GudongRoom extends Room<GudongState> {
     client.send('error', { message });
   }
 
-  // 依當前引擎狀態,補送該玩家「被偷襲 / 本回合無法鑑定」的提示(重連用)
+  // 依當前引擎狀態,補送該玩家「被偷襲」的提示(重連用)。封鎖鑑定不另行提示(與覆蓋一致,只在結果顯示「無法鑑定」)。
   private sendTurnStatus(client: Client, seat: PlayerId) {
     if (!this.engine) return;
-    const status = turnStatusFor(this.engine, seat);
-    if (status === 'GANKED') client.send('effect', { to: seat, kind: 'GANKED' });
-    else if (status === 'BLOCKED') client.send('effect', { to: seat, kind: 'BLOCKED_ROUND', round: this.engine.public.roundIndex });
+    if (turnStatusFor(this.engine, seat) === 'GANKED') client.send('effect', { to: seat, kind: 'GANKED' });
+  }
+
+  // 房間中繼資料:供登入畫面顯示房間 1/2/3 的占用狀態
+  private updateMetadata() {
+    this.setMetadata({
+      slot: this.slot,
+      players: this.state.seatOrder.length,
+      maxPlayers: this.targetCount,
+      started: this.started,
+    });
   }
 
   private seatToSession(seat: PlayerId): string | null {

@@ -1,7 +1,7 @@
 import http from 'http';
 import path from 'path';
 import express from 'express';
-import { Server } from 'colyseus';
+import { Server, matchMaker } from 'colyseus';
 import { WebSocketTransport } from '@colyseus/ws-transport';
 import { GudongRoom } from './GudongRoom';
 
@@ -10,6 +10,14 @@ const app = express();
 
 // 健康檢查(Render 用)
 app.get('/healthz', (_req, res) => res.send('ok'));
+
+// 房間 1/2/3 占用狀態(登入畫面用)
+app.get('/rooms', async (_req, res) => {
+  try {
+    const list = await matchMaker.query({ name: 'gudong' });
+    res.json(list.map((r: any) => ({ slot: r.metadata?.slot, clients: r.clients, maxPlayers: r.metadata?.maxPlayers, started: r.metadata?.started })));
+  } catch { res.json([]); }
+});
 
 // 提供打包後的前端;SPA fallback(排除 colyseus 的 matchmaking 路由)
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');
@@ -20,7 +28,7 @@ app.get(/^(?!\/(matchmake|colyseus)).*/, (_req, res) => {
 
 const httpServer = http.createServer(app);
 const gameServer = new Server({ transport: new WebSocketTransport({ server: httpServer }) });
-gameServer.define('gudong', GudongRoom);
+gameServer.define('gudong', GudongRoom).filterBy(['slot']);
 
 gameServer.listen(port).then(() => {
   console.log(`古董局中局 伺服器啟動於 :${port}`);

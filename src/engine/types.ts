@@ -27,6 +27,24 @@ export interface ProtectedEntry {
   realRevealed: boolean; // 第二高票 = true(當下公開真偽);第一高票 = false
 }
 
+export interface VoteRound {
+  round: number;
+  animals: AnimalId[];
+  tally: Record<AnimalId, number>;
+  breakdown: { seat: PlayerId; alloc: Record<AnimalId, number> }[]; // 誰投了什麼(開票後公開)
+  top: AnimalId[]; // [第一高票, 第二高票]
+  reveals: Record<AnimalId, boolean>; // 本輪當下公開真偽者(第二高票)
+}
+
+export interface EndDetail {
+  identityRevealed: boolean;       // 是否經過身份揭露(直接六分獲勝則為 false)
+  protectedReals: AnimalId[];
+  laoGuessXu: PlayerId | null; xuActual: PlayerId | null; xuBonus: number;
+  yaoGuessFang: PlayerId | null; fangActual: PlayerId | null; fangBonus: number;
+  goodGuessLao: { seat: PlayerId; target: PlayerId }[]; laoActual: PlayerId | null; foundLao: number; threshold: number; laoBonus: number;
+  roles: Record<PlayerId, RoleId>; // 終局公開所有身份
+}
+
 export interface PublicState {
   phase: Phase;
   playerCount: number;
@@ -47,6 +65,9 @@ export interface PublicState {
   speech: { order: PlayerId[]; pointer: number } | null;
 
   protected: ProtectedEntry[];
+  turnOrders: PlayerId[][];      // 每輪的行動順序(歷史)
+  voteRounds: VoteRound[];       // 每輪開票結果(含誰投什麼)
+  endDetail: EndDetail | null;   // 終局計分明細
   revealedReal: Record<AnimalId, boolean>;
   lastTally: Record<AnimalId, number> | null;
   chips: Record<PlayerId, number>;

@@ -93,6 +93,9 @@ export function setupGame(seatOrder: PlayerId[], rng: RNG = Math.random): { stat
       turn: { startPlayer, currentPlayer: null, subStep: null, actedPlayers: [], lastPlayer: null },
       speech: null,
       protected: [],
+      turnOrders: [],
+      voteRounds: [],
+      endDetail: null,
       revealedReal: {} as any,
       lastTally: null,
       chips,
@@ -117,12 +120,6 @@ export function setupGame(seatOrder: PlayerId[], rng: RNG = Math.random): { stat
   // effects:發身份;老朝奉 ↔ 藥不然 互看
   const effects: Effect[] = [];
   for (const p of seatOrder) effects.push({ to: p, kind: 'YOUR_ROLE', role: roleMap[p], camp: camp(roleMap[p]) });
-  // 私下告知 木戶加奈 / 黃煙煙 自己的失能輪次(被動、本人可知)
-  for (const p of seatOrder) {
-    if (roleMap[p] === '木戶加奈' || roleMap[p] === '黃煙煙') {
-      effects.push({ to: p, kind: 'BLOCKED_ROUND', round: blockedRound[p] });
-    }
-  }
   const lao = playerOfRole(state, '老朝奉');
   const yao = playerOfRole(state, '藥不然');
   if (lao && yao) {
@@ -161,7 +158,6 @@ function onTurnBegin(s: GameState, p: PlayerId, effects: Effect[]) {
   } else {
     s.secret.turnGanked = false;
     s.public.turn.subStep = 'AWAIT_IDENTIFY';
-    if (!canIdentifyThisTurn(s, p)) effects.push({ to: p, kind: 'BLOCKED_ROUND', round: s.public.roundIndex });
   }
 }
 
@@ -196,6 +192,7 @@ export function resolveAppraisal(s: GameState, p: PlayerId, animalId: AnimalId):
 }
 
 function enterSpeech(s: GameState) {
+  s.public.turnOrders.push([...s.public.turn.actedPlayers]); // 保留本輪行動順序
   const last = s.public.turn.lastPlayer!;
   const i = s.public.seatOrder.indexOf(last);
   const n = s.public.seatOrder.length;
@@ -229,6 +226,15 @@ function doReveal(s: GameState) {
   s.public.protected.push({ animalId: top2, round: s.public.roundIndex, realRevealed: true });
   s.public.revealedReal[top2] = s.secret.treasures[top2].isReal;
   s.public.lastTally = tally;
+  // 開票後公開:本輪誰投了什麼
+  s.public.voteRounds.push({
+    round: s.public.roundIndex,
+    animals: s.public.roundAnimals.slice(),
+    tally: { ...tally },
+    breakdown: s.public.seatOrder.map((p) => ({ seat: p, alloc: { ...(s.secret.pendingVotes[p] || {}) } })),
+    top: [top1, top2],
+    reveals: { [top2]: s.secret.treasures[top2].isReal },
+  });
   s.secret.roundEffects = { laoSwapActive: false, coveredAnimal: null };
   s.public.turn.startPlayer = s.public.turn.lastPlayer; // 尾家成為下一輪起始
   s.secret.pendingVotes = {};
@@ -244,7 +250,7 @@ function advanceAfterReveal(s: GameState, effects: Effect[]) {
   } else {
     const protectedRealCount = s.public.protected.filter((e) => s.secret.treasures[e.animalId].isReal).length;
     if (protectedRealCount >= 6) {
-      finalize(s, 6, 'GOOD');
+      finalize(s, 6, 'GOOD', false);
     } else {
       s.public.phase = 'IDENTITY_REVEAL';
       s.public.log.push('三輪結束,進入身份揭露階段。');
@@ -268,15 +274,31 @@ function maybeScore(s: GameState) {
   const foundLao = goods.filter((g) => s.secret.guesses.goodGuessLao[g] === lao).length;
   const threshold = Math.ceil(goods.length / 2);
   if (foundLao >= threshold) score += 1;
-  finalize(s, score, score >= 6 ? 'GOOD' : 'BAD');
+  finalize(s, score, score >= 6 ? 'GOOD' : 'BAD', true);
 }
 
-function finalize(s: GameState, score: number, winner: Camp) {
+function finalize(s: GameState, score: number, winner: Camp, identityRevealed: boolean) {
   s.public.phase = 'GAME_END';
   s.public.finalScore = score;
   s.public.winner = winner;
   // 終局公開所有真偽
   for (const a of Object.keys(s.secret.treasures).map(Number)) s.public.revealedReal[a] = s.secret.treasures[a].isReal;
+  // 計分明細
+  const lao = playerOfRole(s, '老朝奉');
+  const xu = playerOfRole(s, '許願');
+  const fang = playerOfRole(s, '方震');
+  const goods = goodPlayers(s);
+  const foundLao = goods.filter((g) => s.secret.guesses.goodGuessLao[g] === lao).length;
+  const threshold = Math.ceil(goods.length / 2);
+  s.public.endDetail = {
+    identityRevealed,
+    protectedReals: s.public.protected.filter((e) => s.secret.treasures[e.animalId].isReal).map((e) => e.animalId),
+    laoGuessXu: s.secret.guesses.laoGuessXu, xuActual: xu, xuBonus: identityRevealed && s.secret.guesses.laoGuessXu !== xu ? 2 : 0,
+    yaoGuessFang: s.secret.guesses.yaoGuessFang, fangActual: fang, fangBonus: identityRevealed && s.secret.guesses.yaoGuessFang !== fang ? 1 : 0,
+    goodGuessLao: goods.filter((g) => g in s.secret.guesses.goodGuessLao).map((g) => ({ seat: g, target: s.secret.guesses.goodGuessLao[g] })),
+    laoActual: lao, foundLao, threshold, laoBonus: identityRevealed && foundLao >= threshold ? 1 : 0,
+    roles: { ...s.secret.roles },
+  };
   s.public.log.push(`遊戲結束,好人方 ${score} 分 — ${winner === 'GOOD' ? '許願陣營' : '老朝奉陣營'}獲勝。`);
 }
 
@@ -330,7 +352,6 @@ export function applyAction(prev: GameState, action: Action): ApplyResult {
       const role = s.secret.roles[action.player];
       if (role === '老朝奉') {
         s.secret.roundEffects.laoSwapActive = true;
-        s.public.log.push('（有人發動了某種能力。）');
       } else if (role === '藥不然') {
         if (!action.targetId || !s.public.seatOrder.includes(action.targetId)) return err(prev, '偷襲目標無效');
         if (!s.secret.pendingGank.includes(action.targetId)) s.secret.pendingGank.push(action.targetId);

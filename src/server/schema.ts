@@ -17,7 +17,6 @@ export class GudongState extends Schema {
   hostSeat = '';                          // 房主座位(公開,供顯示皇冠)
   names = new MapSchema<string>();        // seatId -> 顯示名稱
   connected = new MapSchema<boolean>();   // seatId -> 連線中
-  chips = new MapSchema<number>();        // seatId -> 可用籌碼
 
   roundAnimals = new ArraySchema<number>();
 
@@ -34,6 +33,10 @@ export class GudongState extends Schema {
   revealedReal = new MapSchema<boolean>(); // animalId(字串) -> 真/假
   lastTally = new MapSchema<number>();     // animalId(字串) -> 票數
 
+  turnOrdersJson = new ArraySchema<string>(); // 每輪行動順序(逗號分隔座位)
+  voteRoundsJson = new ArraySchema<string>(); // 每輪開票結果 JSON
+  endDetailJson = '';                          // 終局計分明細 JSON
+
   winner = '';
   finalScore = -1;
   logLine = '';   // 最新一條公開訊息
@@ -46,7 +49,6 @@ defineTypes(GudongState, {
   hostSeat: 'string',
   names: { map: 'string' },
   connected: { map: 'boolean' },
-  chips: { map: 'number' },
   roundAnimals: ['number'],
   startPlayer: 'string',
   currentPlayer: 'string',
@@ -58,6 +60,9 @@ defineTypes(GudongState, {
   protectedList: [ProtectedEntrySchema],
   revealedReal: { map: 'boolean' },
   lastTally: { map: 'number' },
+  turnOrdersJson: ['string'],
+  voteRoundsJson: ['string'],
+  endDetailJson: 'string',
   winner: 'string',
   finalScore: 'number',
   logLine: 'string',
