@@ -20,6 +20,7 @@ export class GudongRoom extends Room<GudongState> {
   private started = false;
   private nextSeatNum = 0;                  // 單調遞增,避免移除座位後 id 重複
   private idleTimer?: ReturnType<typeof setTimeout>;
+  private endTimer?: ReturnType<typeof setTimeout>;   // 遊戲結束 60 秒後自動關房
   private closing = false;                  // 正在關閉房間時跳過重連邏輯
   private readonly IDLE_MS = 30 * 60 * 1000; // 閒置 30 分鐘自動關閉房間
 
@@ -134,6 +135,11 @@ export class GudongRoom extends Room<GudongState> {
     st.finalScore = p.finalScore ?? -1;
     st.logLine = p.log[p.log.length - 1] ?? '';
 
+    // 遊戲結束 → 排定 60 秒後自動關房(讓房號重新變成空房)
+    if (p.phase === 'GAME_END' && !this.endTimer && !this.closing) {
+      this.endTimer = setTimeout(() => this.closeRoom('ended'), 60 * 1000);
+    }
+
     replaceArray(st.roundAnimals, p.roundAnimals);
     replaceArray(st.actedPlayers, p.turn.actedPlayers);
     replaceArray(st.speechOrder, p.speech?.order ?? []);
@@ -221,16 +227,18 @@ export class GudongRoom extends Room<GudongState> {
   }
 
   // 關閉房間:通知所有人後銷毀
-  private closeRoom(reason: 'host' | 'timeout') {
+  private closeRoom(reason: 'host' | 'timeout' | 'ended') {
     if (this.closing) return;
     this.closing = true;
     if (this.idleTimer) clearTimeout(this.idleTimer);
+    if (this.endTimer) clearTimeout(this.endTimer);
     this.broadcast('room_closed', { reason });
     this.disconnect();
   }
 
   onDispose() {
     if (this.idleTimer) clearTimeout(this.idleTimer);
+    if (this.endTimer) clearTimeout(this.endTimer);
   }
 
   private sendError(client: Client, message: string) {

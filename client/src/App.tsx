@@ -82,6 +82,7 @@ export default function App() {
   const [showHelp, setShowHelp] = useState(false);
   const [gankedTurn, setGankedTurn] = useState(false); // 本回合被藥不然偷襲
   const [myChips, setMyChips] = useState(0);            // 自己的剩餘籌碼(隱藏資訊,私下取得)
+  const [endCountdown, setEndCountdown] = useState<number | null>(null); // 結束後關房倒數
 
   // 表單 / 大廳
   const [name, setName] = useState('');
@@ -109,7 +110,10 @@ export default function App() {
     room.onMessage('error', (m: any) => flashError(m.message));
     room.onMessage('room_closed', (m: any) => {
       sessionStorage.removeItem('gudong_reconnect');
-      alert(m?.reason === 'timeout' ? '房間閒置過久,已自動關閉。' : '房主已關閉房間。');
+      const msg = m?.reason === 'timeout' ? '房間閒置過久,已自動關閉。'
+        : m?.reason === 'ended' ? '遊戲已結束,房間已關閉。'
+        : '房主已關閉房間。';
+      alert(msg);
       location.reload();
     });
     room.onMessage('effect', (e: any) => {
@@ -137,6 +141,14 @@ export default function App() {
     const myTurnNow = snap && snap.phase === 'TURN' && snap.currentPlayer === mySeat;
     if (!myTurnNow && gankedTurn) setGankedTurn(false);
   }, [snap?.phase, snap?.currentPlayer, mySeat, gankedTurn]);
+
+  // 遊戲結束 → 顯示 60 秒關房倒數
+  useEffect(() => {
+    if (snap?.phase !== 'GAME_END') { setEndCountdown(null); return; }
+    setEndCountdown(60);
+    const t = setInterval(() => setEndCountdown((c) => (c === null ? null : Math.max(0, c - 1))), 1000);
+    return () => clearInterval(t);
+  }, [snap?.phase]);
 
   // 大廳:定期查詢房間 1/2/3 占用狀態
   async function refreshRooms() {
@@ -342,7 +354,7 @@ export default function App() {
       )}
 
       {s.phase === 'IDENTITY_REVEAL' && (
-        <IdentityUI s={s} role={role} mySeat={mySeat} others={s.seatOrder} nameOf={nameOf} send={send} />
+        <IdentityUI s={s} role={role} mySeat={mySeat} others={s.seatOrder.filter((p) => p !== mySeat)} nameOf={nameOf} send={send} />
       )}
 
       {s.phase === 'GAME_END' && (
@@ -350,6 +362,7 @@ export default function App() {
           <h3>{s.winner === 'GOOD' ? '許願陣營(好人)獲勝!' : '老朝奉陣營(壞人)獲勝!'}</h3>
           <p>好人方最終 {s.finalScore} 分(達 6 分好人勝)。</p>
           <EndDetailView s={s} nameOf={nameOf} />
+          <p style={{ color: '#a11' }}>房間將在 {endCountdown ?? 60} 秒後自動關閉(回到大廳成為空房)。</p>
           <button style={btn} onClick={() => { sessionStorage.removeItem('gudong_reconnect'); location.reload(); }}>回到大廳</button>
         </div>
       )}
@@ -526,6 +539,11 @@ function EndDetailView({ s, nameOf }: any) {
   );
 }
 
+const GOOD_ROLE_NAMES = ['許願', '方震', '黃煙煙', '木戶加奈', '姬云浮'];
+function RoleName({ n }: { n: string }) {
+  return <b style={{ color: GOOD_ROLE_NAMES.includes(n) ? '#0ea5e9' : '#ea580c' }}>{n}</b>;
+}
+
 function HelpModal({ onClose }: { onClose: () => void }) {
   return (
     <div style={overlay} onClick={onClose}>
@@ -540,17 +558,17 @@ function HelpModal({ onClose }: { onClose: () => void }) {
         <p><b>陣營:</b>只有老朝奉與藥不然互相認識隊友;鄭國渠雖是壞人但不知隊友,好人之間也互不相認。人數:6 人移除姬云浮與鄭國渠;7 人移除姬云浮;8 人全角色。</p>
         <p><b>每輪流程:</b>系統抽出 4 個獸首(必定 2 真 2 假)。輪到你時依序:① 選一個獸首鑑定(許願可鑑定兩個);② 發動或不發動角色能力;③ 把行動權派給本輪尚未行動的人。全員行動完後,從尾家左手邊起順時針<b>發言</b>,接著同時<b>投票</b>決定保護哪些獸首(籌碼可任意分配,沒用完留到下一輪),最後<b>開票</b>:最高票兩個獸首被保護,其中第二高票當場公開真偽,第一高票暫不公開。平票時生肖排序在前者視為較高。<b>開票結果出現後,任一玩家按「繼續」即可進入下一輪 / 身份揭露。</b></p>
         <p style={{ color: '#666', fontSize: 13 }}><b>介面標示:</b>玩家列中,👑 是房主、⭐(你)加橘框是你自己、藍底是目前行動者。主動技能(老朝奉/藥不然/鄭國渠)需先選對象再按「偷襲/覆蓋」確認,或按「不發動」;沒有主動能力的角色只會看到「下一步」。</p>
-        <p><b>角色能力:</b></p>
+        <p><b>角色能力</b>(<span style={{ color: '#0ea5e9' }}>水藍=好人</span>、<span style={{ color: '#ea580c' }}>橘=壞人</span>):</p>
         <ul style={{ marginTop: 0 }}>
-          <li>許願(好人首領):一回合可鑑定兩個寶物。</li>
-          <li>方震:無鑑寶能力,但每回合可查看一位玩家的陣營(好/壞)。</li>
-          <li>木戶加奈 / 黃煙煙:被動角色。系統隨機指定某一輪鑑定失敗(玩家無法選擇);該輪不論點哪個寶物都只顯示「無法鑑定」,和被鄭國渠覆蓋的寶物一樣,<b>無法分辨</b>是哪種原因。沒有可發動的能力。</li>
-          <li>姬云浮:鑑定不受老朝奉影響;但若被藥不然偷襲,將永久無法鑑定(之後鑑定都顯示「無法鑑定」)。</li>
-          <li>老朝奉(壞人首領):發動後,順位在他之後的好人鑑定真假互換(本質不變)。<b>發動不會有任何公開提示。</b></li>
-          <li>藥不然:發動後偷襲一名玩家,使其下回合無法行動;偷襲方震會連帶偷襲許願。<b>被偷襲者會收到明顯提示</b>(唯一會明顯提示的情形)。</li>
-          <li>鄭國渠:發動後覆蓋一個寶物,之後鑑定該寶物者只看到「無法鑑定」。</li>
+          <li><RoleName n="許願" />(好人首領):一回合可鑑定兩個寶物。</li>
+          <li><RoleName n="方震" />:無鑑寶能力,但每回合可查看一位玩家的陣營(好/壞)。</li>
+          <li><RoleName n="木戶加奈" /> / <RoleName n="黃煙煙" />:被動角色。系統隨機指定某一輪鑑定失敗(玩家無法選擇);該輪不論點哪個寶物都只顯示「無法鑑定」,和被<RoleName n="鄭國渠" />覆蓋的寶物一樣,<b>無法分辨</b>是哪種原因。沒有可發動的能力。</li>
+          <li><RoleName n="姬云浮" />:鑑定不受<RoleName n="老朝奉" />影響;但若被<RoleName n="藥不然" />偷襲,將永久無法鑑定(之後鑑定都顯示「無法鑑定」)。</li>
+          <li><RoleName n="老朝奉" />(壞人首領):發動後,順位在他之後的好人鑑定真假互換(本質不變)。<b>發動不會有任何公開提示。</b></li>
+          <li><RoleName n="藥不然" />:發動後偷襲一名玩家,使其下回合無法行動;偷襲<RoleName n="方震" />會連帶偷襲<RoleName n="許願" />。<b>被偷襲者會收到明顯提示</b>(唯一會明顯提示的情形)。</li>
+          <li><RoleName n="鄭國渠" />:發動後覆蓋一個寶物,之後鑑定該寶物者只看到「無法鑑定」。</li>
         </ul>
-        <p><b>計分(好人方):</b>每保護一個真品 +1;許願沒被老朝奉找到 +2;方震沒被藥不然找到 +1;過半(含半數)好人找到老朝奉 +1。總分 ≥ 6 好人勝,否則壞人勝。</p>
+        <p><b>計分(好人方):</b>每保護一個真品 +1;<RoleName n="許願" />沒被<RoleName n="老朝奉" />找到 +2;<RoleName n="方震" />沒被<RoleName n="藥不然" />找到 +1;過半(含半數)好人找到<RoleName n="老朝奉" /> +1。總分 ≥ 6 好人勝,否則壞人勝。</p>
 
         <h3>房間閒置時間限制</h3>
         <p>房間若 30 分鐘內沒有任何動作(加入、行動、開始),會自動關閉,所有人退回大廳。這是為了不讓沒人玩的房間一直佔用伺服器。只要遊戲還在進行、有人操作就會持續重置這個計時。</p>
