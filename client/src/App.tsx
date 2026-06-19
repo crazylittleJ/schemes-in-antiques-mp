@@ -1,0 +1,324 @@
+import React, { useEffect, useRef, useState } from 'react';
+import { Client, Room } from 'colyseus.js';
+
+const ANIMALS = ['鼠', '牛', '虎', '兔', '龍', '蛇', '馬', '羊', '猴', '雞', '狗', '豬'];
+const ROLE_DESC: Record<string, string> = {
+  許願: '好人首領,一回合可鑑定兩個寶物。',
+  方震: '無鑑寶能力,但每回合可查看一位玩家的陣營。',
+  黃煙煙: '隨機某一輪無法鑑定。',
+  木戶加奈: '隨機某一輪無法鑑定。',
+  姬云浮: '鑑定不受老朝奉影響;但若被藥不然偷襲將永久無法鑑定。',
+  老朝奉: '壞人首領。發動後,順位在你之後的好人鑑定真假互換。',
+  藥不然: '發動後可偷襲一名玩家,使其下回合無法行動。偷襲方震會連帶許願。',
+  鄭國渠: '不知隊友。發動後覆蓋一個寶物,之後鑑定該寶物者只看到無法鑑定。',
+};
+
+function endpoint() {
+  const loc = window.location;
+  if (loc.port === '5173') return 'ws://localhost:2567'; // 開發
+  const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${loc.host}`;
+}
+
+interface Snap {
+  phase: string; playerCount: number; roundIndex: number;
+  seatOrder: string[]; names: Record<string, string>; connected: Record<string, boolean>;
+  chips: Record<string, number>; roundAnimals: number[];
+  currentPlayer: string; subStep: string; actedPlayers: string[]; lastPlayer: string;
+  speechOrder: string[]; speechPointer: number;
+  protectedList: { animalId: number; round: number; realRevealed: boolean }[];
+  revealedReal: Record<string, boolean>; lastTally: Record<string, number>;
+  winner: string; finalScore: number; logLine: string;
+}
+function mapToObj(m: any): Record<string, any> {
+  const o: Record<string, any> = {};
+  m?.forEach?.((v: any, k: any) => (o[k] = v));
+  return o;
+}
+function snapshot(s: any): Snap {
+  return {
+    phase: s.phase, playerCount: s.playerCount, roundIndex: s.roundIndex,
+    seatOrder: Array.from(s.seatOrder ?? []), names: mapToObj(s.names), connected: mapToObj(s.connected),
+    chips: mapToObj(s.chips), roundAnimals: Array.from(s.roundAnimals ?? []),
+    currentPlayer: s.currentPlayer, subStep: s.subStep, actedPlayers: Array.from(s.actedPlayers ?? []), lastPlayer: s.lastPlayer,
+    speechOrder: Array.from(s.speechOrder ?? []), speechPointer: s.speechPointer,
+    protectedList: Array.from(s.protectedList ?? []).map((p: any) => ({ animalId: p.animalId, round: p.round, realRevealed: p.realRevealed })),
+    revealedReal: mapToObj(s.revealedReal), lastTally: mapToObj(s.lastTally),
+    winner: s.winner, finalScore: s.finalScore, logLine: s.logLine,
+  };
+}
+
+const RESULT_TEXT: Record<string, string> = { REAL: '真品', FAKE: '贗品', UNIDENTIFIABLE: '無法鑑定' };
+
+export default function App() {
+  const clientRef = useRef<Client | null>(null);
+  const roomRef = useRef<Room | null>(null);
+  const [snap, setSnap] = useState<Snap | null>(null);
+  const [mySeat, setMySeat] = useState('');
+  const [isHost, setIsHost] = useState(false);
+  const [role, setRole] = useState('');
+  const [teammate, setTeammate] = useState('');
+  const [privLog, setPrivLog] = useState<string[]>([]);
+  const [error, setError] = useState('');
+  const [connecting, setConnecting] = useState(true);
+
+  // 表單
+  const [name, setName] = useState('');
+  const [password, setPassword] = useState('');
+  const [playerCount, setPlayerCount] = useState(8);
+
+  function attach(room: Room) {
+    roomRef.current = room;
+    localStorage.setItem('gudong_reconnect', room.reconnectionToken);
+    room.onStateChange((s: any) => {
+      setSnap(snapshot(s));
+      localStorage.setItem('gudong_reconnect', room.reconnectionToken);
+    });
+    room.onMessage('seat', (m: any) => { setMySeat(m.seatId); setIsHost(m.isHost); });
+    room.onMessage('error', (m: any) => { setError(m.message); setTimeout(() => setError(''), 3000); });
+    room.onMessage('effect', (e: any) => {
+      if (e.kind === 'YOUR_ROLE') { setRole(e.role); setPrivLog((l) => [...l, `你的身份:${e.role}`]); }
+      else if (e.kind === 'TEAMMATE') { setTeammate(`${e.role}`); setPrivLog((l) => [...l, `隊友:${e.role}`]); }
+      else if (e.kind === 'IDENTIFY_RESULT') setPrivLog((l) => [...l, `鑑定 ${ANIMALS[e.animalId]} → ${RESULT_TEXT[e.result]}`]);
+      else if (e.kind === 'FACTION_RESULT') setPrivLog((l) => [...l, `${e.targetId} 的陣營:${e.camp === 'GOOD' ? '好人' : '壞人'}`]);
+      else if (e.kind === 'GANKED') setPrivLog((l) => [...l, '你被藥不然偷襲了!本回合無法行動。']);
+    });
+    room.onLeave(() => { localStorage.removeItem('gudong_reconnect'); });
+  }
+
+  useEffect(() => {
+    const client = new Client(endpoint());
+    clientRef.current = client;
+    const token = localStorage.getItem('gudong_reconnect');
+    if (token) {
+      client.reconnect(token).then((room) => { attach(room); setConnecting(false); })
+        .catch(() => { localStorage.removeItem('gudong_reconnect'); setConnecting(false); });
+    } else setConnecting(false);
+  }, []);
+
+  async function join() {
+    try {
+      setConnecting(true);
+      const room = await clientRef.current!.joinOrCreate('gudong', { name: name || '玩家', password, playerCount });
+      attach(room); setConnecting(false);
+    } catch (e: any) { setError(e?.message || '加入失敗'); setConnecting(false); }
+  }
+  const send = (payload: any) => roomRef.current?.send('action', payload);
+
+  if (connecting) return <Shell><p>連線中…</p></Shell>;
+  if (!roomRef.current || !snap) {
+    return (
+      <Shell>
+        <h1>古董局中局</h1>
+        <p style={{ color: '#888' }}>第一位進房者即房主,設定密碼與人數;其餘人輸入相同密碼加入。</p>
+        <Field label="暱稱"><input value={name} onChange={(e) => setName(e.target.value)} /></Field>
+        <Field label="房間密碼"><input value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
+        <Field label="人數(房主設定)">
+          <select value={playerCount} onChange={(e) => setPlayerCount(Number(e.target.value))}>
+            <option value={6}>6 人</option><option value={7}>7 人</option><option value={8}>8 人</option>
+          </select>
+        </Field>
+        <button style={btn} onClick={join}>進入房間</button>
+        {error && <p style={{ color: 'crimson' }}>{error}</p>}
+      </Shell>
+    );
+  }
+
+  const s = snap;
+  const myTurn = s.currentPlayer === mySeat && s.phase === 'TURN';
+  const nameOf = (seat: string) => s.names[seat] || seat;
+  const others = s.seatOrder.filter((p) => p !== mySeat);
+  const notActed = s.seatOrder.filter((p) => !s.actedPlayers.includes(p) && p !== mySeat);
+
+  return (
+    <Shell>
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <h2 style={{ margin: 0 }}>古董局中局</h2>
+        <span style={{ color: '#888' }}>{phaseLabel(s.phase)} · 第 {s.roundIndex + 1} 輪</span>
+      </header>
+      {error && <p style={{ color: 'crimson' }}>{error}</p>}
+
+      {/* 玩家列 */}
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '8px 0' }}>
+        {s.seatOrder.map((p) => (
+          <span key={p} style={{
+            padding: '4px 8px', borderRadius: 6, fontSize: 13,
+            background: p === s.currentPlayer ? '#2d6cdf' : '#eee',
+            color: p === s.currentPlayer ? '#fff' : '#333', opacity: s.connected[p] === false ? 0.4 : 1,
+          }}>
+            {nameOf(p)}{p === mySeat ? '(你)' : ''} · {s.chips[p] ?? 0}票
+          </span>
+        ))}
+      </div>
+
+      {/* 我的私密資訊 */}
+      {role && (
+        <div style={box}>
+          <b>你的身份:{role}</b> {teammate && <span style={{ color: '#a33' }}>· 隊友:{teammate}</span>}
+          <div style={{ color: '#777', fontSize: 13 }}>{ROLE_DESC[role]}</div>
+        </div>
+      )}
+
+      {/* 本輪獸首 */}
+      {s.roundAnimals.length > 0 && (
+        <div style={box}>
+          本輪獸首:{s.roundAnimals.map((a) => (
+            <span key={a} style={{ marginRight: 8 }}>
+              {ANIMALS[a]}{a in s.revealedReal ? `(${s.revealedReal[a] ? '真' : '假'})` : ''}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* === 各階段 === */}
+      {s.phase === 'LOBBY' && (
+        <div style={box}>
+          已入座 {s.seatOrder.length} 人。{isHost
+            ? <button style={btn} onClick={() => roomRef.current?.send('start')}>開始遊戲</button>
+            : <span style={{ color: '#888' }}>等待房主開始…</span>}
+        </div>
+      )}
+
+      {s.phase === 'TURN' && (
+        <div style={box}>
+          {myTurn ? <TurnUI s={s} role={role} mySeat={mySeat} notActed={notActed} others={others} nameOf={nameOf} send={send} />
+            : <span style={{ color: '#888' }}>輪到 {nameOf(s.currentPlayer)} 行動…</span>}
+        </div>
+      )}
+
+      {s.phase === 'SPEECH' && (
+        <div style={box}>
+          發言順序:{s.speechOrder.map((p, i) => (
+            <span key={p} style={{ marginRight: 6, fontWeight: i === s.speechPointer ? 700 : 400 }}>{nameOf(p)}</span>
+          ))}
+          {s.speechOrder[s.speechPointer] === mySeat &&
+            <div><button style={btn} onClick={() => send({ type: 'SPEECH_DONE' })}>發言完畢</button></div>}
+        </div>
+      )}
+
+      {s.phase === 'VOTE' && <VoteUI s={s} mySeat={mySeat} send={send} />}
+
+      {s.phase === 'REVEAL' && <div style={box}>{s.logLine}</div>}
+
+      {s.phase === 'IDENTITY_REVEAL' && (
+        <IdentityUI s={s} role={role} mySeat={mySeat} others={s.seatOrder} nameOf={nameOf} send={send} />
+      )}
+
+      {s.phase === 'GAME_END' && (
+        <div style={box}>
+          <h3>{s.winner === 'GOOD' ? '許願陣營(好人)獲勝!' : '老朝奉陣營(壞人)獲勝!'}</h3>
+          <p>好人方最終 {s.finalScore} 分。</p>
+          <p>真偽公開:{Object.entries(s.revealedReal).map(([a, real]) => `${ANIMALS[Number(a)]}${real ? '真' : '假'}`).join('、')}</p>
+          <button style={btn} onClick={() => { localStorage.removeItem('gudong_reconnect'); location.reload(); }}>回到大廳</button>
+        </div>
+      )}
+
+      {/* 公開訊息 + 私密歷史 */}
+      <div style={{ color: '#999', fontSize: 13, marginTop: 8 }}>📢 {s.logLine}</div>
+      <details style={{ marginTop: 8 }}>
+        <summary style={{ cursor: 'pointer', color: '#888' }}>我的紀錄</summary>
+        {privLog.map((l, i) => <div key={i} style={{ fontSize: 13 }}>{l}</div>)}
+      </details>
+    </Shell>
+  );
+}
+
+function TurnUI({ s, role, notActed, others, nameOf, send }: any) {
+  const [picked, setPicked] = useState<number[]>([]);
+  if (s.subStep === 'AWAIT_IDENTIFY') {
+    if (role === '方震') {
+      return <div>查看一位玩家的陣營:{others.map((p: string) => (
+        <button key={p} style={mini} onClick={() => send({ type: 'VIEW_FACTION', targetId: p })}>{nameOf(p)}</button>
+      ))}</div>;
+    }
+    const max = role === '許願' ? 2 : 1;
+    const toggle = (a: number) => setPicked((arr) => arr.includes(a) ? arr.filter((x) => x !== a) : arr.length < max ? [...arr, a] : arr);
+    return (
+      <div>
+        選擇要鑑定的獸首(最多 {max} 個):
+        {s.roundAnimals.map((a: number) => (
+          <button key={a} style={picked.includes(a) ? miniOn : mini} onClick={() => toggle(a)}>{ANIMALS[a]}</button>
+        ))}
+        <button disabled={picked.length === 0} style={btn} onClick={() => send({ type: 'IDENTIFY', animalIds: picked })}>鑑定</button>
+      </div>
+    );
+  }
+  if (s.subStep === 'AWAIT_ABILITY') {
+    return (
+      <div>
+        {role === '老朝奉' && <button style={mini} onClick={() => send({ type: 'USE_ABILITY' })}>發動真假互換</button>}
+        {role === '藥不然' && <span>偷襲:{s.seatOrder.map((p: string) => (
+          <button key={p} style={mini} onClick={() => send({ type: 'USE_ABILITY', targetId: p })}>{nameOf(p)}</button>
+        ))}</span>}
+        {role === '鄭國渠' && <span>覆蓋:{s.roundAnimals.map((a: number) => (
+          <button key={a} style={mini} onClick={() => send({ type: 'USE_ABILITY', animalId: a })}>{ANIMALS[a]}</button>
+        ))}</span>}
+        <button style={btn} onClick={() => send({ type: 'SKIP_ABILITY' })}>不發動</button>
+      </div>
+    );
+  }
+  if (s.subStep === 'AWAIT_PASS') {
+    return <div>派票給下一位:{notActed.map((p: string) => (
+      <button key={p} style={mini} onClick={() => send({ type: 'PASS_TURN', targetId: p })}>{nameOf(p)}</button>
+    ))}</div>;
+  }
+  return null;
+}
+
+function VoteUI({ s, mySeat, send }: any) {
+  const chips = s.chips[mySeat] ?? 0;
+  const [alloc, setAlloc] = useState<Record<number, number>>({});
+  const used = Object.values(alloc).reduce((a: number, b: any) => a + b, 0);
+  const set = (a: number, d: number) => setAlloc((m) => {
+    const v = Math.max(0, (m[a] || 0) + d);
+    const others = used - (m[a] || 0);
+    if (others + v > chips) return m;
+    return { ...m, [a]: v };
+  });
+  return (
+    <div style={box}>
+      決定保護哪些獸首(可用 {chips} 票,已分配 {used}):
+      {s.roundAnimals.map((a: number) => (
+        <div key={a} style={{ margin: '4px 0' }}>
+          {ANIMALS[a]} <button style={mini} onClick={() => set(a, -1)}>−</button>
+          <b style={{ margin: '0 6px' }}>{alloc[a] || 0}</b>
+          <button style={mini} onClick={() => set(a, 1)}>＋</button>
+        </div>
+      ))}
+      <button style={btn} onClick={() => send({ type: 'SUBMIT_VOTE', allocation: alloc })}>送出投票</button>
+      <div style={{ color: '#888', fontSize: 12 }}>未用的票會留到下一輪。</div>
+    </div>
+  );
+}
+
+function IdentityUI({ s, role, others, nameOf, send }: any) {
+  const [done, setDone] = useState(false);
+  let prompt = '', type = '';
+  if (role === '老朝奉') { prompt = '你認為誰是許願?'; type = 'GUESS_XU'; }
+  else if (role === '藥不然') { prompt = '你認為誰是方震?'; type = 'GUESS_FANG'; }
+  else { prompt = '你認為誰是老朝奉?'; type = 'GUESS_LAO'; }
+  return (
+    <div style={box}>
+      <b>身份揭露:{prompt}</b>
+      {done ? <p style={{ color: '#888' }}>已送出,等待其他人…</p> :
+        <div>{others.map((p: string) => (
+          <button key={p} style={mini} onClick={() => { send({ type, targetId: p }); setDone(true); }}>{nameOf(p)}</button>
+        ))}</div>}
+    </div>
+  );
+}
+
+function phaseLabel(p: string) {
+  return ({ LOBBY: '大廳', ROUND_START: '回合開始', TURN: '鑑定回合', SPEECH: '發言', VOTE: '投票', REVEAL: '開票', IDENTITY_REVEAL: '身份揭露', SCORING: '計分', GAME_END: '結束' } as any)[p] || p;
+}
+
+const Shell = ({ children }: { children: React.ReactNode }) => (
+  <div style={{ maxWidth: 640, margin: '0 auto', padding: 16, fontFamily: 'system-ui, sans-serif', color: '#222' }}>{children}</div>
+);
+const Field = ({ label, children }: any) => (
+  <div style={{ margin: '8px 0' }}><label style={{ display: 'block', fontSize: 13, color: '#666' }}>{label}</label>{children}</div>
+);
+const box: React.CSSProperties = { background: '#f6f6f4', border: '1px solid #e3e3df', borderRadius: 8, padding: 12, margin: '8px 0' };
+const btn: React.CSSProperties = { background: '#2d6cdf', color: '#fff', border: 0, borderRadius: 6, padding: '8px 14px', margin: 4, cursor: 'pointer' };
+const mini: React.CSSProperties = { background: '#fff', border: '1px solid #ccc', borderRadius: 6, padding: '5px 9px', margin: 3, cursor: 'pointer' };
+const miniOn: React.CSSProperties = { ...mini, background: '#2d6cdf', color: '#fff', border: '1px solid #2d6cdf' };

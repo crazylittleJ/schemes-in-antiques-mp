@@ -1,0 +1,12 @@
+# 單一 Render web service:前後端同一進程。免費層。
+services:
+  - type: web
+    name: gudong
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "20"

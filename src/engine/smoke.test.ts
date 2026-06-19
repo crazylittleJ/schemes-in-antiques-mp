@@ -1,0 +1,185 @@
+import { setupGame, applyAction, resolveAppraisal, camp, playerOfRole } from './engine';
+import { Action, GameState, PlayerId } from './types';
+
+// 種子亂數,確保可重現
+function mulberry32(seed: number) {
+  return function () {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+let pass = 0, fail = 0;
+function assert(cond: boolean, msg: string) {
+  if (cond) { pass++; } else { fail++; console.log('  ✗ FAIL:', msg); }
+}
+
+function apply(s: GameState, a: Action): GameState {
+  const r = applyAction(s, a);
+  if (!r.ok) throw new Error(`action ${a.type} rejected: ${r.error}`);
+  return r.state;
+}
+
+// ── 1. 全局玩到 GAME_END ───────────────────────────────────────────────────
+function playFullGame(seed: number) {
+  const seats: PlayerId[] = ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'];
+  let { state } = setupGame(seats, mulberry32(seed));
+  assert(state.public.phase === 'TURN', `seed ${seed}: 開局應在 TURN`);
+
+  for (let round = 0; round < 3; round++) {
+    // 回合:逐位行動直到進入 SPEECH
+    let guard = 0;
+    while (state.public.phase === 'TURN') {
+      if (guard++ > 50) throw new Error('回合迴圈未收斂');
+      const cur = state.public.turn.currentPlayer!;
+      const role = state.secret.roles[cur];
+      const sub = state.public.turn.subStep;
+
+      if (sub === 'AWAIT_IDENTIFY') {
+        if (role === '方震') {
+          const target = seats.find((p) => p !== cur)!;
+          state = apply(state, { type: 'VIEW_FACTION', player: cur, targetId: target });
+        } else {
+          const ids = role === '許願'
+            ? state.public.roundAnimals.slice(0, 2)
+            : [state.public.roundAnimals[0]];
+          state = apply(state, { type: 'IDENTIFY', player: cur, animalIds: ids });
+        }
+      } else if (sub === 'AWAIT_ABILITY') {
+        // 第一輪測試一次能力發動
+        if (round === 0 && role === '老朝奉') {
+          state = apply(state, { type: 'USE_ABILITY', player: cur });
+        } else if (round === 0 && role === '鄭國渠') {
+          state = apply(state, { type: 'USE_ABILITY', player: cur, animalId: state.public.roundAnimals[1] });
+        } else {
+          state = apply(state, { type: 'SKIP_ABILITY', player: cur });
+        }
+      } else if (sub === 'AWAIT_PASS') {
+        const remaining = seats.filter((p) => !state.public.turn.actedPlayers.includes(p) && p !== cur);
+        if (remaining.length > 0) state = apply(state, { type: 'PASS_TURN', player: cur, targetId: remaining[0] });
+        // 若 remaining 為空,引擎已自動收尾;迴圈會跳出
+      }
+    }
+
+    assert(state.public.phase === 'SPEECH', `seed ${seed} r${round}: 應進入 SPEECH`);
+    // 發言
+    let sp = 0;
+    while (state.public.phase === 'SPEECH') {
+      const speaker = state.public.speech!.order[state.public.speech!.pointer];
+      state = apply(state, { type: 'SPEECH_DONE', player: speaker });
+      if (sp++ > 20) throw new Error('發言迴圈未收斂');
+    }
+
+    assert(state.public.phase === 'VOTE', `seed ${seed} r${round}: 應進入 VOTE`);
+    // 投票:每人把可用籌碼丟給本輪第一個獸首
+    const animals = state.public.roundAnimals;
+    for (const p of seats) {
+      const chips = state.public.chips[p];
+      state = apply(state, { type: 'SUBMIT_VOTE', player: p, allocation: { [animals[0]]: Math.min(1, chips), [animals[1]]: Math.max(0, chips - 1) } });
+    }
+  }
+
+  // 三輪後:GAME_END(直接勝)或 IDENTITY_REVEAL
+  if (state.public.phase === 'IDENTITY_REVEAL') {
+    const lao = playerOfRole(state, '老朝奉')!;
+    const yao = playerOfRole(state, '藥不然')!;
+    state = apply(state, { type: 'GUESS_XU', player: lao, targetId: seats[0] });
+    state = apply(state, { type: 'GUESS_FANG', player: yao, targetId: seats[1] });
+    for (const g of seats.filter((p) => camp(state.secret.roles[p]) === 'GOOD')) {
+      state = apply(state, { type: 'GUESS_LAO', player: g, targetId: lao });
+    }
+  }
+
+  assert(state.public.phase === 'GAME_END', `seed ${seed}: 最終應為 GAME_END`);
+  assert(state.public.winner !== null, `seed ${seed}: winner 應已決定`);
+  assert(state.public.finalScore !== null, `seed ${seed}: finalScore 應已填`);
+  // 保護獸首總數應為 6(3 輪 × 2)
+  assert(state.public.protected.length === 6, `seed ${seed}: 應保護 6 個獸首,實際 ${state.public.protected.length}`);
+  // 不變式:6 真 6 假
+  const reals = Object.values(state.secret.treasures).filter((t) => t.isReal).length;
+  assert(reals === 6, `seed ${seed}: 應 6 真,實際 ${reals}`);
+  // 每輪 2 真 2 假
+  for (let r = 0; r < 3; r++) {
+    const rr = state.secret.roundLayout[r].filter((a) => state.secret.treasures[a].isReal).length;
+    assert(rr === 2, `seed ${seed} r${r}: 該輪應 2 真,實際 ${rr}`);
+  }
+  return state;
+}
+
+console.log('# 全局可玩性(多種子)');
+for (const seed of [1, 2, 7, 42, 99, 123, 2024, 31337]) playFullGame(seed);
+
+// ── 2. 老朝奉真假互換的精準語意 ─────────────────────────────────────────────
+console.log('# 老朝奉互換');
+{
+  const seats = ['p0', 'p1', 'p2', 'p3', 'p4', 'p5'];
+  let { state } = setupGame(seats, mulberry32(5));
+  // 手動設定一個可控情境
+  const a = state.public.roundAnimals[0];
+  state.secret.treasures[a].isReal = true;
+  state.secret.roundEffects.laoSwapActive = true;
+
+  // 找一個 GOOD 非姬云浮、一個 BAD、(無姬云浮於 6 人局)
+  const good = seats.find((p) => camp(state.secret.roles[p]) === 'GOOD')!;
+  const bad = seats.find((p) => camp(state.secret.roles[p]) === 'BAD')!;
+  assert(resolveAppraisal(state, good, a) === 'FAKE', '互換後好人看真品應顯示假');
+  assert(resolveAppraisal(state, bad, a) === 'REAL', 'BAD 不受互換影響,真品仍顯示真');
+
+  // 覆蓋優先於互換
+  state.secret.roundEffects.coveredAnimal = a;
+  assert(resolveAppraisal(state, good, a) === 'UNIDENTIFIABLE', '覆蓋優先 → 無法鑑定');
+}
+
+// ── 3. 姬云浮:免疫互換、被偷襲後永久失能 ─────────────────────────────────────
+console.log('# 姬云浮');
+{
+  // 8 人局才有姬云浮
+  const seats = ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'];
+  let { state } = setupGame(seats, mulberry32(3));
+  const ji = playerOfRole(state, '姬云浮')!;
+  const a = state.public.roundAnimals[0];
+  state.secret.treasures[a].isReal = true;
+  state.secret.roundEffects.laoSwapActive = true;
+  assert(resolveAppraisal(state, ji, a) === 'REAL', '姬云浮免疫互換,真品仍顯示真');
+  state.secret.jiPermanentlyDisabled = true;
+  assert(resolveAppraisal(state, ji, a) === 'UNIDENTIFIABLE', '永久失能後一律無法鑑定');
+}
+
+// ── 4. 藥不然偷襲方震 → 連帶許願 ───────────────────────────────────────────
+console.log('# 藥不然連帶偷襲許願');
+{
+  const seats = ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'];
+  let { state } = setupGame(seats, mulberry32(11));
+  const yao = playerOfRole(state, '藥不然')!;
+  const fang = playerOfRole(state, '方震')!;
+  const xu = playerOfRole(state, '許願')!;
+  // 把行動權交到藥不然手上(直接操控 state 模擬其回合)
+  state.public.turn.currentPlayer = yao;
+  state.public.turn.subStep = 'AWAIT_ABILITY';
+  const r = applyAction(state, { type: 'USE_ABILITY', player: yao, targetId: fang });
+  assert(r.ok, '藥不然偷襲方震應成功');
+  assert(r.state.secret.pendingGank.includes(fang), '方震應在待偷襲名單');
+  assert(r.state.secret.pendingGank.includes(xu), '許願應連帶進入待偷襲名單');
+}
+
+// ── 5. 木戶/黃的隨機輪無法鑑定 ─────────────────────────────────────────────
+console.log('# 木戶/黃 封鎖輪');
+{
+  const seats = ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'];
+  let { state } = setupGame(seats, mulberry32(8));
+  const mu = playerOfRole(state, '木戶加奈')!;
+  const br = state.secret.blockedRound[mu];
+  state.public.roundIndex = br;
+  const a = state.public.roundAnimals[0];
+  assert(resolveAppraisal(state, mu, a) === 'UNIDENTIFIABLE', '封鎖輪應無法鑑定');
+  state.public.roundIndex = (br + 1) % 3;
+  // 換到非封鎖輪(用該輪的獸首)
+  const a2 = state.secret.roundLayout[(br + 1) % 3][0];
+  const expect = state.secret.treasures[a2].isReal ? 'REAL' : 'FAKE';
+  assert(resolveAppraisal(state, mu, a2) === expect, '非封鎖輪可正常鑑定');
+}
+
+console.log(`\n結果:${pass} passed, ${fail} failed`);
+if (fail > 0) process.exit(1);

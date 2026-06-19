@@ -1,93 +1,50 @@
-# Schemes In Antiques Mp
+# 古董局中局 — 多人連線版
 
+把單機「傳手機」版改成每人各自手機連線、重整不掉、出門也能玩。
+權威伺服器(Colyseus)+ React 前端,打包成**單一 Render web service**。
 
+## 技術棧
+- 伺服器:Colyseus 0.16(Node/TS)— 房間、重連、廣播
+- 前端:Vite + React + TypeScript + `colyseus.js`
+- 遊戲引擎:`src/engine/` 純函式,語言無關,對應 `SPEC.md`,附測試
+- 狀態:記憶體(單一房間、一次一局即夠);免費層
 
-## Getting started
-
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
-
+## 結構
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/me97.littlej/schemes-in-antiques-mp.git
-git branch -M main
-git push -uf origin main
+src/engine/    遊戲規則(types / engine / smoke.test) — 已驗證
+src/server/    Colyseus:schema(公開狀態)/ GudongRoom / index(同源服務前端)
+client/        Vite + React 前端
+SPEC.md        GameState + reducer 規格 v1
 ```
 
-## Integrate with your tools
+## 安全模型(隱藏身份的關鍵)
+- 伺服器是唯一真相。client 只送「意圖」,`GudongRoom` 注入經驗證的座位 id,忽略前端自稱身份。
+- **公開狀態**(輪次、本輪獸首、誰行動、保護結果)→ 同步 Schema,全房可見。
+- **祕密資訊**(身份、真偽、能力發動、個人鑑定結果)→ 只用 `client.send()` 單點發給該玩家,**永不進同步 Schema**。
 
-* [Set up project integrations](https://gitlab.com/me97.littlej/schemes-in-antiques-mp/-/settings/integrations)
+## 本機開發
+```bash
+npm install
+npm run test          # 跑引擎測試(應 130 passed）
+npm run dev:server    # 伺服器 :2567
+npm run dev:client    # 前端 :5173(會自動連 ws://localhost:2567)
+```
+開多個瀏覽器分頁,第一個進房者輸入密碼+人數即房主,其餘輸入相同密碼加入,房主按「開始遊戲」。
 
-## Collaborate with your team
+## 部署到 Render(單一 service)
+1. 推到 GitHub。
+2. Render → New → Web Service,連這個 repo(內含 `render.yaml`)。
+3. Build:`npm install && npm run build`;Start:`npm start`;Plan:Free。
+4. 完成後給大家網址即可。第一個連入的人吃一次約一分鐘冷啟動,之後遊戲進行中有連線就不會休眠。
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+## 重連(重整不掉)
+- 前端把 `room.reconnectionToken` 存 localStorage;重整/鎖屏回來自動 `client.reconnect()`。
+- 伺服器 `onLeave` 用 `allowReconnection(client, 60)` 保留座位 60 秒,回來後補送該玩家的私訊歷史。
+- 升級到 Colyseus 0.17 可改用 `onDrop/onReconnect`,握手更快。
 
-## Test and Deploy
+## 密碼
+`GudongRoom.onAuth()` 驗證房間密碼;不符即拒絕加入,同時擋掉公開網址被陌生人連上叫醒免費 instance。
 
-Use the built-in continuous integration in GitLab.
-
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+## 已知範圍 / 後續
+- 前端目前是「能完整跑完一局」的功能版 UI,刻意樸素好讓你重新設計樣式。
+- 引擎已涵蓋 SPEC.md 全部規則與邊角(老朝奉互換、藥不然連帶偷襲方震→許願、姬云浮永久失能、木戶/黃封鎖輪、動態派票、平票生肖序、計分與勝負)。
