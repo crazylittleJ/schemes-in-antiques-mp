@@ -17,6 +17,10 @@ export class GudongRoom extends Room<GudongState> {
   private sessionToSeat = new Map<string, PlayerId>(); // client.sessionId -> seatId
   private privateLog: Record<PlayerId, Effect[]> = {}; // 每位玩家的私訊歷史(供重連補送)
   private started = false;
+  private nextSeatNum = 0;                  // 單調遞增,避免移除座位後 id 重複
+  private idleTimer?: ReturnType<typeof setTimeout>;
+  private closing = false;                  // 正在關閉房間時跳過重連邏輯
+  private readonly IDLE_MS = 30 * 60 * 1000; // 閒置 30 分鐘自動關閉房間
 
   onCreate(options: JoinOptions) {
     this.password = options.password ?? '';
@@ -24,14 +28,23 @@ export class GudongRoom extends Room<GudongState> {
     this.setState(new GudongState());
     this.state.phase = 'LOBBY';
     this.state.playerCount = this.targetCount;
+    this.touch();
 
     this.onMessage('action', (client, payload: Omit<Action, 'player'>) => {
+      this.touch();
       this.handleAction(client, payload);
     });
     this.onMessage('start', (client) => {
+      this.touch();
       const seat = this.sessionToSeat.get(client.sessionId);
       if (seat !== this.hostSeat) return this.sendError(client, '只有房主能開始遊戲');
       this.startGame(client);
+    });
+    // 房主關閉房間:踢出所有人並銷毀房間
+    this.onMessage('close', (client) => {
+      const seat = this.sessionToSeat.get(client.sessionId);
+      if (seat !== this.hostSeat) return this.sendError(client, '只有房主能關閉房間');
+      this.closeRoom('host');
     });
   }
 
@@ -43,7 +56,8 @@ export class GudongRoom extends Room<GudongState> {
   }
 
   onJoin(client: Client, options: JoinOptions) {
-    const seat = `seat${this.state.seatOrder.length}`;
+    this.touch();
+    const seat = `seat${this.nextSeatNum++}`;
     this.sessionToSeat.set(client.sessionId, seat);
     this.privateLog[seat] = [];
     this.state.seatOrder.push(seat);
@@ -128,18 +142,21 @@ export class GudongRoom extends Room<GudongState> {
     }
   }
 
-  // ── 重連(規格:重整不掉)───────────────────────────────────────────────
-  // 0.17 也可改用 onDrop/onReconnect;此處用跨版本穩定的 onLeave + allowReconnection。
+  // ── 重連 / 離開 ────────────────────────────────────────────────────────
+  // 非自願斷線 → 保留座位等重連;自願離開 → 依階段釋放座位或標記離線。
   async onLeave(client: Client, consented: boolean) {
     const seat = this.sessionToSeat.get(client.sessionId);
+    if (this.closing) return; // 關房中,不做重連等待
+
     if (seat) {
       this.state.connected.set(seat, false);
       if (this.engine) this.engine.public.connected[seat] = false;
     }
+
+    if (consented) { this.handleConsentedLeave(client, seat); return; }
+
     try {
-      if (consented) throw new Error('consented');
       await this.allowReconnection(client, 60); // 給 60 秒重連
-      // 回來了
       if (seat) {
         this.state.connected.set(seat, true);
         if (this.engine) this.engine.public.connected[seat] = true;
@@ -149,6 +166,57 @@ export class GudongRoom extends Room<GudongState> {
     } catch {
       // 超時未回:保留座位(回合制,可由其他人代為推進);此處不移除
     }
+  }
+
+  // 自願離開遊戲
+  private handleConsentedLeave(_client: Client, seat?: PlayerId) {
+    if (!seat) return;
+    this.sessionToSeat.delete(this.seatToSession(seat) ?? '');
+    if (this.state.phase === 'LOBBY' && !this.started) {
+      // 還沒開局:直接釋放座位,讓別人能補進
+      const i = this.state.seatOrder.indexOf(seat);
+      if (i >= 0) this.state.seatOrder.splice(i, 1);
+      this.state.names.delete(seat);
+      this.state.connected.delete(seat);
+      this.state.chips.delete(seat);
+      delete this.privateLog[seat];
+    } else {
+      // 進行中:保留座位但標記永久離線(避免破壞回合資料)
+      this.state.connected.set(seat, false);
+      if (this.engine) this.engine.public.connected[seat] = false;
+    }
+    if (seat === this.hostSeat) this.reassignHost();
+    this.touch();
+  }
+
+  // 房主離開時把房主轉給仍在線的下一位
+  private reassignHost() {
+    const next = this.state.seatOrder.find((s) => this.state.connected.get(s) !== false) ?? this.state.seatOrder[0] ?? null;
+    this.hostSeat = next;
+    if (next) {
+      const sid = this.seatToSession(next);
+      const c = sid ? this.clients.find((cl) => cl.sessionId === sid) : undefined;
+      c?.send('seat', { seatId: next, isHost: true });
+    }
+  }
+
+  // 閒置計時:任何活動都重置;到時自動關房
+  private touch() {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => this.closeRoom('timeout'), this.IDLE_MS);
+  }
+
+  // 關閉房間:通知所有人後銷毀
+  private closeRoom(reason: 'host' | 'timeout') {
+    if (this.closing) return;
+    this.closing = true;
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.broadcast('room_closed', { reason });
+    this.disconnect();
+  }
+
+  onDispose() {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
   }
 
   private sendError(client: Client, message: string) {

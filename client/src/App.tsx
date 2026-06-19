@@ -69,13 +69,18 @@ export default function App() {
 
   function attach(room: Room) {
     roomRef.current = room;
-    localStorage.setItem('gudong_reconnect', room.reconnectionToken);
+    sessionStorage.setItem('gudong_reconnect', room.reconnectionToken);
     room.onStateChange((s: any) => {
       setSnap(snapshot(s));
-      localStorage.setItem('gudong_reconnect', room.reconnectionToken);
+      sessionStorage.setItem('gudong_reconnect', room.reconnectionToken);
     });
     room.onMessage('seat', (m: any) => { setMySeat(m.seatId); setIsHost(m.isHost); });
     room.onMessage('error', (m: any) => { setError(m.message); setTimeout(() => setError(''), 3000); });
+    room.onMessage('room_closed', (m: any) => {
+      sessionStorage.removeItem('gudong_reconnect');
+      alert(m?.reason === 'timeout' ? '房間閒置過久,已自動關閉。' : '房主已關閉房間。');
+      location.reload();
+    });
     room.onMessage('effect', (e: any) => {
       if (e.kind === 'YOUR_ROLE') { setRole(e.role); setPrivLog((l) => [...l, `你的身份:${e.role}`]); }
       else if (e.kind === 'TEAMMATE') { setTeammate(`${e.role}`); setPrivLog((l) => [...l, `隊友:${e.role}`]); }
@@ -83,16 +88,16 @@ export default function App() {
       else if (e.kind === 'FACTION_RESULT') setPrivLog((l) => [...l, `${e.targetId} 的陣營:${e.camp === 'GOOD' ? '好人' : '壞人'}`]);
       else if (e.kind === 'GANKED') setPrivLog((l) => [...l, '你被藥不然偷襲了!本回合無法行動。']);
     });
-    room.onLeave(() => { localStorage.removeItem('gudong_reconnect'); });
+    room.onLeave(() => { sessionStorage.removeItem('gudong_reconnect'); });
   }
 
   useEffect(() => {
     const client = new Client(endpoint());
     clientRef.current = client;
-    const token = localStorage.getItem('gudong_reconnect');
+    const token = sessionStorage.getItem('gudong_reconnect');
     if (token) {
       client.reconnect(token).then((room) => { attach(room); setConnecting(false); })
-        .catch(() => { localStorage.removeItem('gudong_reconnect'); setConnecting(false); });
+        .catch(() => { sessionStorage.removeItem('gudong_reconnect'); setConnecting(false); });
     } else setConnecting(false);
   }, []);
 
@@ -104,6 +109,16 @@ export default function App() {
     } catch (e: any) { setError(e?.message || '加入失敗'); setConnecting(false); }
   }
   const send = (payload: any) => roomRef.current?.send('action', payload);
+  function leaveGame() {
+    if (!confirm('確定離開遊戲?')) return;
+    sessionStorage.removeItem('gudong_reconnect');
+    roomRef.current?.leave(true);
+    location.reload();
+  }
+  function closeRoom() {
+    if (!confirm('確定關閉房間?所有人都會被踢出。')) return;
+    roomRef.current?.send('close');
+  }
 
   if (connecting) return <Shell><p>連線中…</p></Shell>;
   if (!roomRef.current || !snap) {
@@ -134,7 +149,11 @@ export default function App() {
     <Shell>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
         <h2 style={{ margin: 0 }}>古董局中局</h2>
-        <span style={{ color: '#888' }}>{phaseLabel(s.phase)} · 第 {s.roundIndex + 1} 輪</span>
+        <span style={{ color: '#888' }}>
+          {phaseLabel(s.phase)} · 第 {s.roundIndex + 1} 輪
+          <button style={textBtn} onClick={leaveGame}>離開</button>
+          {isHost && <button style={textBtn} onClick={closeRoom}>關閉房間</button>}
+        </span>
       </header>
       {error && <p style={{ color: 'crimson' }}>{error}</p>}
 
@@ -209,7 +228,7 @@ export default function App() {
           <h3>{s.winner === 'GOOD' ? '許願陣營(好人)獲勝!' : '老朝奉陣營(壞人)獲勝!'}</h3>
           <p>好人方最終 {s.finalScore} 分。</p>
           <p>真偽公開:{Object.entries(s.revealedReal).map(([a, real]) => `${ANIMALS[Number(a)]}${real ? '真' : '假'}`).join('、')}</p>
-          <button style={btn} onClick={() => { localStorage.removeItem('gudong_reconnect'); location.reload(); }}>回到大廳</button>
+          <button style={btn} onClick={() => { sessionStorage.removeItem('gudong_reconnect'); location.reload(); }}>回到大廳</button>
         </div>
       )}
 
@@ -322,3 +341,4 @@ const box: React.CSSProperties = { background: '#f6f6f4', border: '1px solid #e3
 const btn: React.CSSProperties = { background: '#2d6cdf', color: '#fff', border: 0, borderRadius: 6, padding: '8px 14px', margin: 4, cursor: 'pointer' };
 const mini: React.CSSProperties = { background: '#fff', border: '1px solid #ccc', borderRadius: 6, padding: '5px 9px', margin: 3, cursor: 'pointer' };
 const miniOn: React.CSSProperties = { ...mini, background: '#2d6cdf', color: '#fff', border: '1px solid #2d6cdf' };
+const textBtn: React.CSSProperties = { marginLeft: 10, background: 'none', border: 'none', color: '#2d6cdf', cursor: 'pointer', fontSize: 13, padding: 0 };
