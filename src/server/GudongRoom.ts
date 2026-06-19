@@ -64,7 +64,7 @@ export class GudongRoom extends Room<GudongState> {
     this.state.names.set(seat, options.name || seat);
     this.state.connected.set(seat, true);
     this.state.chips.set(seat, 0);
-    if (this.hostSeat === null) this.hostSeat = seat;
+    if (this.hostSeat === null) { this.hostSeat = seat; this.state.hostSeat = seat; }
     client.send('seat', { seatId: seat, isHost: seat === this.hostSeat });
   }
 
@@ -172,6 +172,8 @@ export class GudongRoom extends Room<GudongState> {
   private handleConsentedLeave(_client: Client, seat?: PlayerId) {
     if (!seat) return;
     this.sessionToSeat.delete(this.seatToSession(seat) ?? '');
+    // 房主主動離開 → 整局結束(關閉房間)
+    if (seat === this.hostSeat) { this.closeRoom('host'); return; }
     if (this.state.phase === 'LOBBY' && !this.started) {
       // 還沒開局:直接釋放座位,讓別人能補進
       const i = this.state.seatOrder.indexOf(seat);
@@ -185,19 +187,7 @@ export class GudongRoom extends Room<GudongState> {
       this.state.connected.set(seat, false);
       if (this.engine) this.engine.public.connected[seat] = false;
     }
-    if (seat === this.hostSeat) this.reassignHost();
     this.touch();
-  }
-
-  // 房主離開時把房主轉給仍在線的下一位
-  private reassignHost() {
-    const next = this.state.seatOrder.find((s) => this.state.connected.get(s) !== false) ?? this.state.seatOrder[0] ?? null;
-    this.hostSeat = next;
-    if (next) {
-      const sid = this.seatToSession(next);
-      const c = sid ? this.clients.find((cl) => cl.sessionId === sid) : undefined;
-      c?.send('seat', { seatId: next, isHost: true });
-    }
   }
 
   // 閒置計時:任何活動都重置;到時自動關房
