@@ -14,6 +14,7 @@ export class GudongState extends Schema {
   roundIndex = 0;
 
   seatOrder = new ArraySchema<string>();
+  hostSeat = '';                          // 房主座位(公開,供顯示皇冠)
   names = new MapSchema<string>();        // seatId -> 顯示名稱
   connected = new MapSchema<boolean>();   // seatId -> 連線中
   chips = new MapSchema<number>();        // seatId -> 可用籌碼
@@ -42,6 +43,7 @@ defineTypes(GudongState, {
   playerCount: 'number',
   roundIndex: 'number',
   seatOrder: ['string'],
+  hostSeat: 'string',
   names: { map: 'string' },
   connected: { map: 'boolean' },
   chips: { map: 'number' },

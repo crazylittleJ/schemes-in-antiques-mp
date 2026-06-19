@@ -23,6 +23,7 @@ function endpoint() {
 interface Snap {
   phase: string; playerCount: number; roundIndex: number;
   seatOrder: string[]; names: Record<string, string>; connected: Record<string, boolean>;
+  hostSeat: string;
   chips: Record<string, number>; roundAnimals: number[];
   currentPlayer: string; subStep: string; actedPlayers: string[]; lastPlayer: string;
   speechOrder: string[]; speechPointer: number;
@@ -39,6 +40,7 @@ function snapshot(s: any): Snap {
   return {
     phase: s.phase, playerCount: s.playerCount, roundIndex: s.roundIndex,
     seatOrder: Array.from(s.seatOrder ?? []), names: mapToObj(s.names), connected: mapToObj(s.connected),
+    hostSeat: s.hostSeat ?? '',
     chips: mapToObj(s.chips), roundAnimals: Array.from(s.roundAnimals ?? []),
     currentPlayer: s.currentPlayer, subStep: s.subStep, actedPlayers: Array.from(s.actedPlayers ?? []), lastPlayer: s.lastPlayer,
     speechOrder: Array.from(s.speechOrder ?? []), speechPointer: s.speechPointer,
@@ -111,14 +113,11 @@ export default function App() {
   }
   const send = (payload: any) => roomRef.current?.send('action', payload);
   function leaveGame() {
-    if (!confirm('確定離開遊戲?')) return;
+    const msg = isHost ? '你是房主,離開將結束整局並關閉房間,確定?' : '確定離開遊戲?';
+    if (!confirm(msg)) return;
     sessionStorage.removeItem('gudong_reconnect');
     roomRef.current?.leave(true);
     location.reload();
-  }
-  function closeRoom() {
-    if (!confirm('確定關閉房間?所有人都會被踢出。')) return;
-    roomRef.current?.send('close');
   }
 
   if (connecting) return <Shell><p>連線中…</p></Shell>;
@@ -156,8 +155,7 @@ export default function App() {
         <span style={{ color: '#888' }}>
           {phaseLabel(s.phase)} · 第 {s.roundIndex + 1} 輪
           <button style={textBtn} onClick={() => setShowHelp(true)}>說明</button>
-          <button style={textBtn} onClick={leaveGame}>離開</button>
-          {isHost && <button style={textBtn} onClick={closeRoom}>關閉房間</button>}
+          <button style={textBtn} onClick={leaveGame}>{isHost ? '離開房間' : '離開'}</button>
         </span>
       </header>
       {error && <p style={{ color: 'crimson' }}>{error}</p>}
@@ -170,7 +168,7 @@ export default function App() {
             background: p === s.currentPlayer ? '#2d6cdf' : '#eee',
             color: p === s.currentPlayer ? '#fff' : '#333', opacity: s.connected[p] === false ? 0.4 : 1,
           }}>
-            {nameOf(p)}{p === mySeat ? '(你)' : ''} · {s.chips[p] ?? 0}票
+            {p === s.hostSeat ? '👑' : ''}{nameOf(p)}{p === mySeat ? '(你)' : ''} · {s.chips[p] ?? 0}票
           </span>
         ))}
       </div>
@@ -362,12 +360,14 @@ function HelpModal({ onClose }: { onClose: () => void }) {
         <p>另外:免費伺服器閒置約 15 分鐘會休眠,因此<b>很久沒人用時,第一個連入的人需等約一分鐘</b>把伺服器喚醒;之後只要有人連著就不會休眠。</p>
 
         <h3>房主與關閉房間</h3>
-        <p>第一個進房的人是<b>房主</b>,只有房主能按「開始遊戲」。房主右上角有「關閉房間」鈕,按下會把所有人踢出並結束這局——卡關或想重來時用它最快。若房主自己離開,房主身分會自動轉給下一位仍在線的玩家。</p>
+        <p>第一個進房的人是<b>房主</b>,名字旁會顯示一個皇冠 👑,只有房主能按「開始遊戲」。</p>
+        <p>房主右上角的按鈕是<b>「離開房間」</b>:房主一旦主動離開,<b>整局立即結束、所有人退回大廳</b>(房主不會轉移給別人)。卡關或想重來時,由房主按它最快。一般玩家的按鈕則是「離開」,只會讓自己退出。</p>
+        <p>注意:這只針對<b>主動按離開</b>。房主若只是網路抖動、重整或鎖屏,屬於暫離(見下),不會結束遊戲——伺服器會保留房主席位等他回來。</p>
 
         <h3>暫離與重連</h3>
-        <p><b>短暫斷線 / 重整 / 鎖屏:</b>伺服器會幫你保留座位 60 秒。在這段時間內回來(或重新整理頁面),會自動回到原座位,並補回你的身份與紀錄——所以中途網路抖一下、不小心重整都沒關係。</p>
+        <p><b>短暫斷線 / 重整 / 鎖屏:</b>伺服器會幫你保留座位 60 秒。在這段時間內回來(或重新整理頁面),會自動回到原座位,並補回你的身份與紀錄——所以中途網路抖一下、不小心重整都沒關係,房主也一樣。</p>
         <p><b>注意:</b>重連資訊存在這個分頁裡,<b>完全關掉分頁</b>就會清掉,無法再自動回座。手機鎖屏、切到別的 App 通常分頁還在,不受影響。</p>
-        <p><b>主動「離開」:</b>在大廳離開會直接釋放座位,讓別人能補進;遊戲<b>進行中</b>離開則會保留座位、標記為離線(避免破壞回合資料)。若剛好輪到離線的人,回合會卡住,這時請房主「關閉房間」重開一局。</p>
+        <p><b>主動「離開」:</b>一般玩家在大廳離開會直接釋放座位,讓別人能補進;遊戲<b>進行中</b>離開則會保留座位、標記為離線(避免破壞回合資料)。若剛好輪到離線的人,回合會卡住,這時請房主用「離開房間」結束重開,或由房主重開一局。</p>
       </div>
     </div>
   );
