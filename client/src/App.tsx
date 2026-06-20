@@ -85,11 +85,11 @@ export default function App() {
   const [myChips, setMyChips] = useState(0);            // 自己的剩餘籌碼(隱藏資訊,私下取得)
   const [endCountdown, setEndCountdown] = useState<number | null>(null); // 結束後關房倒數
 
-  // 表單 / 大廳
-  const [name, setName] = useState('');
-  const [password, setPassword] = useState('');
+  // 表單 / 大廳(記住上次輸入,重整後自動帶入)
+  const [name, setName] = useState(() => sessionStorage.getItem('gudong_name') || '');
+  const [password, setPassword] = useState(() => sessionStorage.getItem('gudong_pw') || '');
   const [playerCount, setPlayerCount] = useState(8);
-  const [slot, setSlot] = useState(1);                 // 房間 1/2/3
+  const [slot, setSlot] = useState(() => Number(sessionStorage.getItem('gudong_slot')) || 1);
   const [rooms, setRooms] = useState<any[]>([]);        // 各房間占用狀態
 
   const errTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -141,10 +141,22 @@ export default function App() {
     const client = new Client(endpoint());
     clientRef.current = client;
     const token = sessionStorage.getItem('gudong_reconnect');
-    if (token) {
-      client.reconnect(token).then((room) => { attach(room); setConnecting(false); })
-        .catch(() => { sessionStorage.removeItem('gudong_reconnect'); setConnecting(false); });
-    } else setConnecting(false);
+    if (!token) { setConnecting(false); return; }
+    let cancelled = false;
+    (async () => {
+      // 重整時舊連線的關閉事件伺服器可能還沒處理完,首次重連會「token 失效」;重試幾次即可
+      for (let i = 0; i < 8 && !cancelled; i++) {
+        try {
+          const room = await client.reconnect(token);
+          if (!cancelled) { attach(room); setConnecting(false); }
+          return;
+        } catch {
+          await new Promise((r) => setTimeout(r, 500));
+        }
+      }
+      if (!cancelled) { sessionStorage.removeItem('gudong_reconnect'); setConnecting(false); }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   // 我的回合結束就清掉「被偷襲」提示
@@ -179,6 +191,9 @@ export default function App() {
   async function join() {
     if (!name || /\s/.test(name)) { flashError('暱稱不可為空,且不能包含空白字元'); return; }
     if (!password || /\s/.test(password)) { flashError('密碼不可為空,且不能包含空白字元'); return; }
+    sessionStorage.setItem('gudong_name', name);
+    sessionStorage.setItem('gudong_pw', password);
+    sessionStorage.setItem('gudong_slot', String(slot));
     try {
       setConnecting(true);
       const room = await clientRef.current!.joinOrCreate('gudong', { name, password, playerCount, slot });
