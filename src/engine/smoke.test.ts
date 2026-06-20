@@ -129,10 +129,10 @@ console.log('# 老朝奉互換');
   state.secret.roundEffects.laoSwapActive = true;
 
   // 找一個 GOOD 非姬云浮、一個 BAD、(無姬云浮於 6 人局)
-  const good = seats.find((p) => camp(state.secret.roles[p]) === 'GOOD')!;
+  const good = seats.find((p) => camp(state.secret.roles[p]) === 'GOOD' && state.secret.roles[p] !== '姬云浮')!;
   const bad = seats.find((p) => camp(state.secret.roles[p]) === 'BAD')!;
   assert(resolveAppraisal(state, good, a) === 'FAKE', '互換後好人看真品應顯示假');
-  assert(resolveAppraisal(state, bad, a) === 'REAL', 'BAD 不受互換影響,真品仍顯示真');
+  assert(resolveAppraisal(state, bad, a) === 'FAKE', '互換後壞人(含鄭國渠)看真品也應顯示假');
 
   // 覆蓋優先於互換
   state.secret.roundEffects.coveredAnimal = a;
@@ -280,7 +280,8 @@ console.log('# 防豬隊友規則');
   state.public.turn.currentPlayer = other; state.public.turn.startPlayer = other; state.public.turn.subStep = 'AWAIT_PASS'; state.public.turn.actedPlayers = [];
   const r = applyAction(state, { type: 'PASS_TURN', player: other, targetId: ji });
   assert(r.ok && r.state.public.turn.subStep === 'AWAIT_PASS', '姬云浮失能後輪到她時直接進入派票');
-  assert(r.effects.some((e: any) => e.to === ji && e.kind === 'GANKED'), '姬云浮失能後每輪收到被偷襲提示');
+  assert(r.effects.some((e: any) => e.to === ji && e.kind === 'JI_DISABLED'), '姬云浮失能後每輪收到無法鑑定提示');
+  assert(r.effects.some((e: any) => e.to === ji && e.kind === 'TURN_RECORD'), '姬云浮失能後每輪寫入個人紀錄');
 }
 
 console.log(`\n結果:${pass} passed, ${fail} failed`);

@@ -150,15 +150,20 @@ function ANIMAL(a: AnimalId) { return ['鼠', '牛', '虎', '兔', '龍', '蛇',
 
 function onTurnBegin(s: GameState, p: PlayerId, effects: Effect[]) {
   const idx = s.secret.pendingGank.indexOf(p);
-  const jiDead = s.secret.roles[p] === '姬云浮' && s.secret.jiPermanentlyDisabled;
-  if (idx >= 0 || jiDead) {
-    if (idx >= 0) {
-      s.secret.pendingGank.splice(idx, 1);
-      if (s.secret.roles[p] === '姬云浮') s.secret.jiPermanentlyDisabled = true;
-    }
+  if (idx >= 0) {
+    // 本回合被藥不然偷襲:無法行動,直接派票
+    s.secret.pendingGank.splice(idx, 1);
+    if (s.secret.roles[p] === '姬云浮') s.secret.jiPermanentlyDisabled = true;
     s.secret.turnGanked = true;
-    s.public.turn.subStep = 'AWAIT_PASS'; // 不可鑑定、不可發動能力,但仍須派票
+    s.public.turn.subStep = 'AWAIT_PASS';
     effects.push({ to: p, kind: 'GANKED' });
+    effects.push({ to: p, kind: 'TURN_RECORD', round: s.public.roundIndex, text: '被藥不然偷襲,本回合無法行動' });
+  } else if (s.secret.roles[p] === '姬云浮' && s.secret.jiPermanentlyDisabled) {
+    // 被偷襲後永久失能:之後每輪都無法鑑定,直接派票
+    s.secret.turnGanked = false;
+    s.public.turn.subStep = 'AWAIT_PASS';
+    effects.push({ to: p, kind: 'JI_DISABLED' });
+    effects.push({ to: p, kind: 'TURN_RECORD', round: s.public.roundIndex, text: '無法鑑定(被藥不然偷襲後永久失能)' });
   } else {
     s.secret.turnGanked = false;
     s.public.turn.subStep = 'AWAIT_IDENTIFY';
@@ -189,7 +194,9 @@ export function resolveAppraisal(s: GameState, p: PlayerId, animalId: AnimalId):
   if (!canIdentifyThisTurn(s, p)) return 'UNIDENTIFIABLE';
   if (s.secret.roundEffects.coveredAnimal === animalId) return 'UNIDENTIFIABLE';
   let base: AppraisalResult = s.secret.treasures[animalId].isReal ? 'REAL' : 'FAKE';
-  if (s.secret.roundEffects.laoSwapActive && camp(s.secret.roles[p]) === 'GOOD' && s.secret.roles[p] !== '姬云浮') {
+  // 老朝奉發動真假互換後,順位在他之後鑑定的玩家(姬云浮免疫除外)都會看到互換的結果,
+  // 包含壞人鄭國渠在內;老朝奉本人先鑑定後才發動,因此不受影響。
+  if (s.secret.roundEffects.laoSwapActive && s.secret.roles[p] !== '姬云浮') {
     base = base === 'REAL' ? 'FAKE' : 'REAL';
   }
   return base;
@@ -466,10 +473,11 @@ export function applyAction(prev: GameState, action: Action): ApplyResult {
 export { playerOfRole, goodPlayers, GOOD_ROLES, BAD_ROLES };
 
 // 查詢某玩家「當前回合」的特殊狀態(供重連時補送提示)。偷襲優先於封鎖。
-export function turnStatusFor(state: GameState, seat: PlayerId): 'GANKED' | 'BLOCKED' | null {
+export function turnStatusFor(state: GameState, seat: PlayerId): 'GANKED' | 'JI_DISABLED' | 'BLOCKED' | null {
   const t = state.public.turn;
   if (state.public.phase !== 'TURN' || t.currentPlayer !== seat) return null;
   if (state.secret.turnGanked && t.subStep === 'AWAIT_PASS') return 'GANKED';
+  if (state.secret.roles[seat] === '姬云浮' && state.secret.jiPermanentlyDisabled && t.subStep === 'AWAIT_PASS') return 'JI_DISABLED';
   if (t.subStep === 'AWAIT_IDENTIFY' && !canIdentifyThisTurn(state, seat)) return 'BLOCKED';
   return null;
 }

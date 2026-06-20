@@ -81,6 +81,7 @@ export default function App() {
   const [connecting, setConnecting] = useState(true);
   const [showHelp, setShowHelp] = useState(false);
   const [gankedTurn, setGankedTurn] = useState(false); // 本回合被藥不然偷襲
+  const [jiDisabledTurn, setJiDisabledTurn] = useState(false); // 姬云浮失能:本回合無法鑑定
   const [viewedPlayers, setViewedPlayers] = useState<string[]>([]); // 方震已查看過的玩家
   const [myChips, setMyChips] = useState(0);            // 自己的剩餘籌碼(隱藏資訊,私下取得)
   const [endCountdown, setEndCountdown] = useState<number | null>(null); // 結束後關房倒數
@@ -130,8 +131,11 @@ export default function App() {
           : '發動真假互換';
         setPrivLog((l) => [...l, `${rd}${txt}`]);
       }
+      else if (e.kind === 'TURN_RECORD') setPrivLog((l) => [...l, `${rd}${e.text}`]);
       else if (e.kind === 'GANKED') setGankedTurn(true);
+      else if (e.kind === 'JI_DISABLED') setJiDisabledTurn(true);
     });
+    room.send('resync'); // 處理器已註冊,請伺服器可靠補送座位/身份/紀錄(避免競態丟訊息)
   }
 
   useEffect(() => {
@@ -160,11 +164,11 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
-  // 我的回合結束就清掉「被偷襲」提示
+  // 我的回合結束就清掉「被偷襲 / 無法鑑定」提示
   useEffect(() => {
     const myTurnNow = snap && snap.phase === 'TURN' && snap.currentPlayer === mySeat;
-    if (!myTurnNow && gankedTurn) setGankedTurn(false);
-  }, [snap?.phase, snap?.currentPlayer, mySeat, gankedTurn]);
+    if (!myTurnNow) { if (gankedTurn) setGankedTurn(false); if (jiDisabledTurn) setJiDisabledTurn(false); }
+  }, [snap?.phase, snap?.currentPlayer, mySeat, gankedTurn, jiDisabledTurn]);
 
   // 遊戲結束 → 顯示 60 秒關房倒數
   useEffect(() => {
@@ -362,6 +366,11 @@ export default function App() {
               🚫 你被藥不然偷襲了!本回合無法鑑定、無法發動能力,直接派票即可。
             </div>
           )}
+          {myTurn && !gankedTurn && jiDisabledTurn && (
+            <div style={{ background: '#fdeedd', border: '1px solid #f0c089', color: '#9a5b00', borderRadius: 6, padding: '8px 10px', marginBottom: 8, fontWeight: 700 }}>
+              🚫 你已被藥不然偷襲而永久失能,本回合無法鑑定,直接派票即可。
+            </div>
+          )}
           {myTurn ? <TurnUI s={s} role={role} mySeat={mySeat} notActed={notActed} others={others} nameOf={nameOf} send={send} viewedPlayers={viewedPlayers} />
             : <span style={{ color: '#888' }}>輪到 {nameOf(s.currentPlayer)} 行動…</span>}
         </div>
@@ -486,6 +495,7 @@ function TurnUI({ s, role, notActed, others, nameOf, send, viewedPlayers }: any)
 function VoteUI({ s, chips, send }: any) {
   const [alloc, setAlloc] = useState<Record<number, number>>({});
   const used = Object.values(alloc).reduce((a: number, b: any) => a + b, 0);
+  const lastRound = s.roundIndex >= 2; // 第 3 輪(0-indexed 2)為最後一輪
   const set = (a: number, d: number) => setAlloc((m) => {
     const v = Math.max(0, (m[a] || 0) + d);
     const others = used - (m[a] || 0);
@@ -495,6 +505,11 @@ function VoteUI({ s, chips, send }: any) {
   return (
     <div style={box}>
       決定保護哪些獸首(可用 {chips} 票,已分配 {used}):
+      {lastRound && (
+        <div style={{ background: '#fdeedd', border: '1px solid #f0c089', color: '#9a5b00', borderRadius: 6, padding: '8px 10px', margin: '6px 0', fontSize: 13 }}>
+          ⚠️ 此輪為<b>最後一輪</b>,沒用完的票數將直接作廢——但你仍可選擇不用完(可能作為策略)。
+        </div>
+      )}
       {s.roundAnimals.map((a: number) => (
         <div key={a} style={{ margin: '4px 0' }}>
           {ANIMALS[a]} <button style={mini} onClick={() => set(a, -1)}>−</button>
@@ -503,7 +518,7 @@ function VoteUI({ s, chips, send }: any) {
         </div>
       ))}
       <button style={btn} onClick={() => send({ type: 'SUBMIT_VOTE', allocation: alloc })}>送出投票</button>
-      <div style={{ color: '#888', fontSize: 12 }}>未用的票會留到下一輪。</div>
+      <div style={{ color: '#888', fontSize: 12 }}>{lastRound ? '可不用完;沒用完的票不會留到下一輪。' : '未用的票會留到下一輪。'}</div>
     </div>
   );
 }

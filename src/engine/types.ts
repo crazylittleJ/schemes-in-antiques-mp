@@ -108,6 +108,8 @@ export type Effect =
   | { to: PlayerId; kind: 'FACTION_RESULT'; targetId: PlayerId; camp: Camp; round: number }
   | { to: PlayerId; kind: 'ABILITY_USED'; round: number; ability: '真假互換' | '偷襲' | '覆蓋'; targetId?: PlayerId; animalId?: AnimalId }
   | { to: PlayerId; kind: 'GANKED' }
+  | { to: PlayerId; kind: 'JI_DISABLED' }                         // 姬云浮失能:本回合無法鑑定(提示用,不持久化)
+  | { to: PlayerId; kind: 'TURN_RECORD'; round: number; text: string } // 寫入個人紀錄(持久化,可重連補送)
   | { to: PlayerId; kind: 'BLOCKED_ROUND'; round: number }
   | { to: PlayerId; kind: 'ERROR'; message: string };
 

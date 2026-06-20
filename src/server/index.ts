@@ -27,7 +27,13 @@ app.get(/^(?!\/(matchmake|colyseus)).*/, (_req, res) => {
 });
 
 const httpServer = http.createServer(app);
-const gameServer = new Server({ transport: new WebSocketTransport({ server: httpServer }) });
+const gameServer = new Server({
+  transport: new WebSocketTransport({
+    server: httpServer,
+    pingInterval: 2000,   // 每 2 秒 ping 一次
+    pingMaxRetries: 2,    // 連續 2 次無回應即視為斷線(約 4–6 秒偵測到),讓重整後能盡快接管座位
+  }),
+});
 gameServer.define('gudong', GudongRoom).filterBy(['slot']);
 
 gameServer.listen(port).then(() => {

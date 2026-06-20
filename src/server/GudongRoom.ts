@@ -35,6 +35,16 @@ export class GudongRoom extends Room<GudongState> {
     this.updateMetadata();
     this.touch();
 
+    // 客戶端註冊好訊息處理器後會送 'resync',此時再可靠地補送座位/身份/私訊紀錄,
+    // 避免 onJoin 當下送出的訊息因「處理器尚未註冊」而被丟掉(原本需重整兩次的主因)。
+    this.onMessage('resync', (client) => {
+      const seat = this.sessionToSeat.get(client.sessionId);
+      if (!seat) return;
+      client.send('seat', { seatId: seat, isHost: seat === this.hostSeat });
+      for (const e of this.privateLog[seat] ?? []) client.send('effect', e);
+      this.sendTurnStatus(client, seat);
+      this.sync();
+    });
     this.onMessage('action', (client, payload: Omit<Action, 'player'>) => {
       this.touch();
       this.handleAction(client, payload);
@@ -79,9 +89,7 @@ export class GudongRoom extends Room<GudongState> {
       this.sessionToSeat.set(client.sessionId, reclaim);
       this.state.connected.set(reclaim, true);
       if (this.engine) this.engine.public.connected[reclaim] = true;
-      client.send('seat', { seatId: reclaim, isHost: reclaim === this.hostSeat });
-      for (const e of this.privateLog[reclaim] ?? []) client.send('effect', e); // 補送私訊歷史
-      this.sendTurnStatus(client, reclaim);
+      // 座位/身份/私訊與「被偷襲」提示都改由客戶端的 'resync' 觸發補送(避免競態丟訊息、避免重複)
       this.sync();
       this.updateMetadata();
       return;
@@ -131,8 +139,9 @@ export class GudongRoom extends Room<GudongState> {
       const payload: Effect = e.kind === 'TEAMMATE'
         ? { ...e, name: this.state.names.get(e.playerId) ?? e.playerId }
         : e;
-      // 偷襲/封鎖為當回合短暫提示,不入重連歷史(改由 sendTurnStatus 依當前狀態補送)
-      const transient = payload.kind === 'BLOCKED_ROUND' || payload.kind === 'GANKED';
+      // 偷襲/失能/封鎖為當回合短暫提示,不入重連歷史(改由 sendTurnStatus 依當前狀態補送);
+      // TURN_RECORD 等其餘私訊則持久化,重連時補送。
+      const transient = payload.kind === 'BLOCKED_ROUND' || payload.kind === 'GANKED' || payload.kind === 'JI_DISABLED';
       if (!transient) this.privateLog[payload.to]?.push(payload);
       const sid = this.seatToSession(payload.to);
       if (sid) {
@@ -255,10 +264,12 @@ export class GudongRoom extends Room<GudongState> {
     client.send('error', { message });
   }
 
-  // 依當前引擎狀態,補送該玩家「被偷襲」的提示(重連用)。封鎖鑑定不另行提示(與覆蓋一致,只在結果顯示「無法鑑定」)。
+  // 依當前引擎狀態,補送該玩家「被偷襲 / 無法鑑定(失能)」的提示(重連用)。封鎖鑑定不另行提示。
   private sendTurnStatus(client: Client, seat: PlayerId) {
     if (!this.engine) return;
-    if (turnStatusFor(this.engine, seat) === 'GANKED') client.send('effect', { to: seat, kind: 'GANKED' });
+    const st = turnStatusFor(this.engine, seat);
+    if (st === 'GANKED') client.send('effect', { to: seat, kind: 'GANKED' });
+    else if (st === 'JI_DISABLED') client.send('effect', { to: seat, kind: 'JI_DISABLED' });
   }
 
   // 房間中繼資料:供登入畫面顯示房間 1/2/3 的占用狀態
