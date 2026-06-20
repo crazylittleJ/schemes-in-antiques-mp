@@ -117,7 +117,7 @@ export default function App() {
     });
     room.onMessage('effect', (e: any) => {
       const rd = e.round !== undefined ? `第${e.round + 1}輪 ` : '';
-      if (e.kind === 'YOUR_ROLE') { setRole(e.role); setPrivLog((l) => [...l, `你的身份:${e.role}`]); }
+      if (e.kind === 'YOUR_ROLE') { setRole(e.role); setPrivLog((l) => [...l, `我的身份:${e.role}`]); }
       else if (e.kind === 'TEAMMATE') { const who = e.name || e.playerId; setTeammate(`${who}(${e.role})`); setPrivLog((l) => [...l, `${who} 是${e.role}(你的隊友)`]); }
       else if (e.kind === 'IDENTIFY_RESULT') setPrivLog((l) => [...l, `${rd}鑑定 ${ANIMALS[e.animalId]} → ${RESULT_TEXT[e.result]}`]);
       else if (e.kind === 'FACTION_RESULT') {
@@ -306,7 +306,7 @@ export default function App() {
               fontWeight: isMe ? 700 : 400,
               opacity: s.connected[p] === false ? 0.4 : 1,
             }}>
-              {p === s.hostSeat ? '👑' : ''}{isMe ? '⭐ ' : ''}{nameOf(p)}{isMe ? '(你)' : ''}
+              {p === s.hostSeat ? '👑' : ''}{isMe ? '⭐ ' : ''}{nameOf(p)}{isMe ? '(自己)' : ''}
             </span>
           );
         })}
@@ -316,7 +316,7 @@ export default function App() {
       {/* 我的私密資訊 */}
       {role && (
         <div style={box}>
-          <b>你的身份:{role}</b> {teammate && <span style={{ color: '#a33' }}>· 隊友:{teammate}</span>}
+          <b>我的身份:{role}</b> {teammate && <span style={{ color: '#a33' }}>· 隊友:{teammate}</span>}
           <div style={{ color: '#777', fontSize: 13 }}>{ROLE_DESC[role]}</div>
         </div>
       )}
@@ -375,7 +375,7 @@ export default function App() {
                 <div key={p} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderTop: i ? '1px solid #f0f0f0' : 'none' }}>
                   <span style={{ width: 22, color: '#999', textAlign: 'right' }}>{i + 1}.</span>
                   <span style={{ flex: 1, fontWeight: p === mySeat ? 700 : 400, opacity: s.connected[p] === false ? 0.45 : 1 }}>
-                    {p === s.hostSeat ? '👑 ' : ''}{nameOf(p)}{p === mySeat ? '(你)' : ''}{s.connected[p] === false ? '(離線)' : ''}
+                    {p === s.hostSeat ? '👑 ' : ''}{nameOf(p)}{p === mySeat ? '(自己)' : ''}{s.connected[p] === false ? '(離線)' : ''}
                   </span>
                   <button style={mini} disabled={i === 0} onClick={() => moveSeat(i, -1)}>↑</button>
                   <button style={mini} disabled={i === s.seatOrder.length - 1} onClick={() => moveSeat(i, 1)}>↓</button>
@@ -392,7 +392,7 @@ export default function App() {
               <div style={{ color: '#777', fontSize: 13, margin: '4px 0 8px' }}>房主正在排定座位;行動與發言將依此順序進行:</div>
               {s.seatOrder.map((p, i) => (
                 <div key={p} style={{ padding: '3px 0', opacity: s.connected[p] === false ? 0.45 : 1, fontWeight: p === mySeat ? 700 : 400 }}>
-                  {i + 1}. {p === s.hostSeat ? '👑 ' : ''}{nameOf(p)}{p === mySeat ? '(你)' : ''}
+                  {i + 1}. {p === s.hostSeat ? '👑 ' : ''}{nameOf(p)}{p === mySeat ? '(自己)' : ''}
                 </div>
               ))}
               <div style={{ marginTop: 8, color: '#888' }}>已入座 {s.seatOrder.length} 人,等待房主開始…</div>
@@ -663,17 +663,17 @@ function HelpModal({ onClose }: { onClose: () => void }) {
         <h3>遊戲規則</h3>
         <p><b>目標:</b>好人方「許願陣營」要保護到 6 個真品(湊滿 6 分)獲勝;否則壞人方「老朝奉陣營」獲勝。十二獸首中有 6 真 6 假,分 3 輪鑑定。</p>
         <p><b>陣營:</b>只有老朝奉與藥不然互相認識隊友;鄭國渠雖是壞人但不知隊友,好人之間也互不相認。人數:6 人移除姬云浮與鄭國渠;7 人移除姬云浮;8 人全角色。</p>
-        <p><b>每輪流程:</b>系統抽出 4 個獸首(必定 2 真 2 假)。輪到你時依序:① 選一個獸首鑑定(許願可鑑定兩個);② 發動或不發動角色能力;③ 把行動權派給本輪尚未行動的人。全員行動完後,從尾家左手邊起順時針<b>發言</b>,接著同時<b>投票</b>決定保護哪些獸首(籌碼可任意分配,沒用完留到下一輪),最後<b>開票</b>:最高票兩個獸首被保護,其中第二高票當場公開真偽,第一高票暫不公開。平票時生肖排序在前者視為較高。<b>開票結果出現後,任一玩家按「繼續」即可進入下一輪 / 身份揭露。</b></p>
-        <p style={{ color: '#666', fontSize: 13 }}><b>介面標示:</b>玩家列中,👑 是房主、⭐(你)加橘框是你自己、藍底是目前行動者。主動技能(老朝奉/藥不然/鄭國渠)需先選對象再按「偷襲/覆蓋」確認,或按「不發動」;沒有主動能力的角色只會看到「下一步」。</p>
+        <p><b>每輪流程:</b>系統抽出 4 個獸首(必定 2 真 2 假)。輪到你時依序:① 選一個獸首鑑定(許願可鑑定兩個);② 發動或不發動角色能力;③ 把行動權派給本輪尚未行動的人。全員行動完後,從尾家左手邊起順時針<b>發言</b>,接著同時<b>投票</b>決定保護哪些獸首(籌碼可任意分配,沒用完留到下一輪),最後<b>開票</b>:最高票兩個獸首被保護,其中第二高票當場公開真偽,第一高票暫不公開。<b>開票結果如果是平票，是以出現順序靠前的獸首越高，例如:出現 雞、龍、鼠、豬。全平票，第一高票到最低為 雞、龍、鼠、豬</b> <b>開票結果出現後,任一玩家按「繼續」即可進入下一輪 / 身份揭露。</b></p>
+        <p style={{ color: '#666', fontSize: 13 }}><b>介面標示:</b>玩家列中,👑 是房主、⭐(自己)加橘框是你自己、藍底是目前行動者。主動技能(老朝奉/藥不然/鄭國渠)需先選對象再按「偷襲/覆蓋」確認,或按「不發動」;沒有主動能力的角色只會看到「下一步」。</p>
         <p><b>角色能力</b>(<span style={{ color: '#0ea5e9' }}>水藍=好人</span>、<span style={{ color: '#ea580c' }}>橘=壞人</span>):</p>
         <ul style={{ marginTop: 0 }}>
-          <li><RoleName n="許願" />(好人首領):一回合可鑑定兩個寶物。</li>
+          <li><RoleName n="許願" />:好人首領，一回合可鑑定兩個寶物。</li>
           <li><RoleName n="方震" />:無鑑寶能力,但每回合可查看一位玩家的陣營(好/壞)。</li>
-          <li><RoleName n="木戶加奈" /> / <RoleName n="黃煙煙" />:被動角色。系統隨機指定某一輪鑑定失敗(玩家無法選擇);該輪不論點哪個寶物都只顯示「無法鑑定」,和被<RoleName n="鄭國渠" />覆蓋的寶物一樣,<b>無法分辨</b>是哪種原因。沒有可發動的能力。</li>
-          <li><RoleName n="姬云浮" />:鑑定不受<RoleName n="老朝奉" />影響;但若被<RoleName n="藥不然" />偷襲,將永久無法鑑定(之後鑑定都顯示「無法鑑定」)。</li>
-          <li><RoleName n="老朝奉" />(壞人首領):發動後,順位在他之後的好人鑑定真假互換(本質不變)。<b>發動不會有任何公開提示。</b></li>
-          <li><RoleName n="藥不然" />:發動後偷襲一名玩家,使其下回合無法行動;偷襲<RoleName n="方震" />會連帶偷襲<RoleName n="許願" />。<b>被偷襲者會收到明顯提示</b>(唯一會明顯提示的情形)。</li>
-          <li><RoleName n="鄭國渠" />:發動後覆蓋一個寶物,之後鑑定該寶物者只看到「無法鑑定」。</li>
+          <li><RoleName n="木戶加奈" /> / <RoleName n="黃煙煙" />:系統隨機指定某一輪鑑定失敗;該輪不論點哪個寶物都只顯示「無法鑑定」,和被<RoleName n="鄭國渠" />覆蓋的寶物一樣,<b>無法分辨</b>是哪種原因。沒有可發動的能力。</li>
+          <li><RoleName n="姬云浮" />:鑑定不受<RoleName n="老朝奉" />影響;但若被<RoleName n="藥不然" />偷襲,將永久無法鑑定。</li>
+          <li><RoleName n="老朝奉" />:壞人首領，技能發動後,順位在他之後的好人鑑定真假互換(本質不變)。<b>壞人陣營則不受影響。</b></li>
+          <li><RoleName n="藥不然" />:發動後偷襲一名玩家,使其無法行動;偷襲<RoleName n="方震" />會連帶偷襲<RoleName n="許願" />。<b>被偷襲者會收到明顯提示</b>若偷襲行動順序在藥不然前面的玩家，效果會延續至下一輪。</li>
+          <li><RoleName n="鄭國渠" />:發動後覆蓋一個寶物,之後鑑定該寶物者只能看到「無法鑑定」。</li>
         </ul>
         <p><b>計分(好人方):</b>每保護一個真品 +1;<RoleName n="許願" />沒被<RoleName n="老朝奉" />找到 +2;<RoleName n="方震" />沒被<RoleName n="藥不然" />找到 +1;過半(含半數)好人找到<RoleName n="老朝奉" /> +1。總分 ≥ 6 好人勝,否則壞人勝。</p>
 
