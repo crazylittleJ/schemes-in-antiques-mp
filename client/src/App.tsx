@@ -407,7 +407,17 @@ export default function App() {
           <p>好人方最終 {s.finalScore} 分(達 6 分好人勝)。</p>
           <EndDetailView s={s} nameOf={nameOf} />
           <p style={{ color: '#a11' }}>房間將在 {String(Math.floor((endCountdown ?? 300) / 60)).padStart(2, '0')}:{String((endCountdown ?? 300) % 60).padStart(2, '0')} 後自動關閉(回到大廳成為空房)。</p>
-          <button style={btn} onClick={() => { sessionStorage.removeItem('gudong_active'); location.reload(); }}>回到大廳</button>
+          {isHost ? (
+            <>
+              <button style={btn} onClick={() => { sessionStorage.removeItem('gudong_active'); roomRef.current?.leave(true); location.reload(); }}>關閉房間並回到大廳</button>
+              <div style={{ color: '#888', fontSize: 12 }}>你是房主,離開會<b>立即關閉房間</b>並釋放房號(其他人會一起回到大廳)。</div>
+            </>
+          ) : (
+            <>
+              <button style={btn} onClick={() => { sessionStorage.removeItem('gudong_active'); location.reload(); }}>回到大廳</button>
+              <div style={{ color: '#888', fontSize: 12 }}>房主離開或倒數結束後,房間就會關閉。</div>
+            </>
+          )}
         </div>
       )}
 
