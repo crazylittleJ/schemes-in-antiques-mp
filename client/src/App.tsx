@@ -141,12 +141,23 @@ export default function App() {
     const nm = sessionStorage.getItem('gudong_name');
     const pw = sessionStorage.getItem('gudong_pw');
     const sl = Number(sessionStorage.getItem('gudong_slot')) || 1;
-    if (active && nm && pw) {
-      // 重整/重連:用記住的暱稱+密碼自動回到原房間,伺服器會讓你接管原座位
-      client.joinOrCreate('gudong', { name: nm, password: pw, slot: sl, playerCount: 8 })
-        .then((room) => { attach(room); setConnecting(false); })
-        .catch(() => { sessionStorage.removeItem('gudong_active'); setConnecting(false); });
-    } else setConnecting(false);
+    if (!(active && nm && pw)) { setConnecting(false); return; }
+    let cancelled = false;
+    (async () => {
+      // 重整後馬上重進時,伺服器可能還沒偵測到舊連線關閉,會暫時回「暱稱已被使用」;
+      // 這是同一個人在接管自己的座位,持續重試到舊連線被判定離線即可成功。
+      for (let i = 0; i < 20 && !cancelled; i++) {
+        try {
+          const room = await client.joinOrCreate('gudong', { name: nm, password: pw, slot: sl, playerCount: 8 });
+          if (!cancelled) { attach(room); setConnecting(false); }
+          return;
+        } catch {
+          await new Promise((r) => setTimeout(r, 800));
+        }
+      }
+      if (!cancelled) { sessionStorage.removeItem('gudong_active'); setConnecting(false); }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   // 我的回合結束就清掉「被偷襲」提示
@@ -206,7 +217,7 @@ export default function App() {
         {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
         <h1>古董局中局</h1>
         <div style={{ background: '#fff3d6', border: '1px solid #e6c14d', color: '#7a5b00', borderRadius: 8, padding: '10px 12px', margin: '8px 0', fontSize: 14 }}>
-          📌 <b>請勿關閉分頁</b>。遊戲進行中切到 LINE、鎖屏或重新整理都沒關係,回來會自動接回(保留約 13 分鐘);但若<b>完全關閉分頁</b>就會離開。房主離開會結束整局。
+          📌 重新整理、切到 LINE、鎖屏都沒關係——回來會用你的<b>暱稱+密碼自動接回原座位</b>(可能需等幾秒讓伺服器確認舊連線已離線)。請盡量別<b>完全關閉分頁</b>。房主離開會結束整局。
         </div>
         <p style={{ color: '#888' }}>選一個房間,設定密碼與人數即成為房主;其餘人選同一房間、輸入相同密碼加入。</p>
         <Field label="暱稱"><input value={name} onChange={(e) => setName(e.target.value)} placeholder="不可空白或含空格" /></Field>
