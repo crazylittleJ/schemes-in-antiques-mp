@@ -54,10 +54,13 @@ export class GudongRoom extends Room<GudongState> {
 
   // 密碼驗證(0.17 簽名:onAuth(client, options, context))
   onAuth(_client: Client, options: JoinOptions) {
-    if ((options.password ?? '') !== this.password) throw new Error('密碼錯誤');
+    const name = options.name || '';
+    const password = options.password || '';
+    if (!name || /\s/.test(name)) throw new Error('暱稱不可為空,且不能包含空白字元');
+    if (!password || /\s/.test(password)) throw new Error('密碼不可為空,且不能包含空白字元');
+    if (password !== this.password) throw new Error('密碼錯誤');
     if (this.started) throw new Error('遊戲已開始,無法加入');
-    const name = (options.name || '').trim();
-    if (name && [...this.state.names.values()].includes(name)) throw new Error('暱稱已被使用,請換一個');
+    if ([...this.state.names.values()].includes(name)) throw new Error('暱稱已被使用,請換一個');
     return true;
   }
 
@@ -135,9 +138,9 @@ export class GudongRoom extends Room<GudongState> {
     st.finalScore = p.finalScore ?? -1;
     st.logLine = p.log[p.log.length - 1] ?? '';
 
-    // 遊戲結束 → 排定 60 秒後自動關房(讓房號重新變成空房)
+    // 遊戲結束 → 排定 5 分鐘後自動關房(讓房號重新變成空房)
     if (p.phase === 'GAME_END' && !this.endTimer && !this.closing) {
-      this.endTimer = setTimeout(() => this.closeRoom('ended'), 60 * 1000);
+      this.endTimer = setTimeout(() => this.closeRoom('ended'), 5 * 60 * 1000);
     }
 
     replaceArray(st.roundAnimals, p.roundAnimals);

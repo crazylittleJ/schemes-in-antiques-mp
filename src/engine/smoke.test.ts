@@ -43,7 +43,7 @@ function playFullGame(seed: number) {
         if (blocked || jiDead) {
           state = apply(state, { type: 'SKIP_IDENTIFY', player: cur });
         } else if (role === '方震') {
-          const target = seats.find((p) => p !== cur)!;
+          const target = seats.find((p) => p !== cur && !state.secret.fangViewed.includes(p))!;
           state = apply(state, { type: 'VIEW_FACTION', player: cur, targetId: target });
         } else {
           const ids = role === '許願'
@@ -235,6 +235,52 @@ console.log('# 偷襲優先於封鎖');
   assert(r.ok, '派票給木戶應成功');
   assert(turnStatusFor(s2, mu) === 'GANKED', '同時被偷襲與封鎖 → 優先 GANKED');
   assert(s2.public.turn.subStep === 'AWAIT_PASS', '被偷襲者直接進入派票步驟');
+}
+
+// ── 7. 防豬隊友 & 姬云浮失能後每輪被偷襲 ──────────────────────────────────
+console.log('# 防豬隊友規則');
+{
+  const seats = ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'];
+  let { state } = setupGame(seats, mulberry32(3));
+  const xu = playerOfRole(state, '許願')!;
+  const fang = playerOfRole(state, '方震')!;
+  const yao = playerOfRole(state, '藥不然')!;
+  const a = state.public.roundAnimals;
+
+  // 許願:必須剛好兩個
+  state.public.turn.currentPlayer = xu; state.public.turn.startPlayer = xu; state.public.turn.subStep = 'AWAIT_IDENTIFY'; state.public.turn.actedPlayers = [];
+  assert(!applyAction(state, { type: 'IDENTIFY', player: xu, animalIds: [a[0]] }).ok, '許願只鑑定一個應被拒');
+  assert(!applyAction(state, { type: 'IDENTIFY', player: xu, animalIds: [a[0], a[0]] }).ok, '許願重複選同一個應被拒');
+  assert(applyAction(state, { type: 'IDENTIFY', player: xu, animalIds: [a[0], a[1]] }).ok, '許願鑑定兩個應成功');
+
+  // 方震:不可查看自己、不可重複查看
+  state.public.turn.currentPlayer = fang; state.public.turn.startPlayer = fang; state.public.turn.subStep = 'AWAIT_IDENTIFY'; state.public.turn.actedPlayers = [];
+  assert(!applyAction(state, { type: 'VIEW_FACTION', player: fang, targetId: fang }).ok, '方震不可查看自己');
+  const tgt = seats.find((p) => p !== fang)!;
+  const v1 = applyAction(state, { type: 'VIEW_FACTION', player: fang, targetId: tgt });
+  assert(v1.ok, '方震首次查看應成功');
+  state = v1.state;
+  state.public.turn.subStep = 'AWAIT_IDENTIFY'; // 模擬下一回合,再次嘗試查看同一人
+  assert(!applyAction(state, { type: 'VIEW_FACTION', player: fang, targetId: tgt }).ok, '方震不可重複查看同一人');
+
+  // 藥不然:不可偷襲自己
+  state.public.turn.currentPlayer = yao; state.public.turn.startPlayer = yao; state.public.turn.subStep = 'AWAIT_ABILITY'; state.public.turn.actedPlayers = [];
+  assert(!applyAction(state, { type: 'USE_ABILITY', player: yao, targetId: yao }).ok, '藥不然不可偷襲自己');
+}
+{
+  // 姬云浮永久失能後,每輪回合開始即視為被偷襲(直接派票)
+  const seats = ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'];
+  let { state } = setupGame(seats, mulberry32(7));
+  const ji = playerOfRole(state, '姬云浮')!;
+  state.secret.jiPermanentlyDisabled = true;
+  const effects: any[] = [];
+  state.public.turn.currentPlayer = ji; state.public.turn.actedPlayers = [];
+  // 直接呼叫不到 onTurnBegin(內部),改用 PASS 流程觸發
+  const other = seats.find((p) => p !== ji)!;
+  state.public.turn.currentPlayer = other; state.public.turn.startPlayer = other; state.public.turn.subStep = 'AWAIT_PASS'; state.public.turn.actedPlayers = [];
+  const r = applyAction(state, { type: 'PASS_TURN', player: other, targetId: ji });
+  assert(r.ok && r.state.public.turn.subStep === 'AWAIT_PASS', '姬云浮失能後輪到她時直接進入派票');
+  assert(r.effects.some((e: any) => e.to === ji && e.kind === 'GANKED'), '姬云浮失能後每輪收到被偷襲提示');
 }
 
 console.log(`\n結果:${pass} passed, ${fail} failed`);

@@ -110,6 +110,7 @@ export function setupGame(seatOrder: PlayerId[], rng: RNG = Math.random): { stat
       blockedRound,
       jiPermanentlyDisabled: false,
       pendingGank: [],
+      fangViewed: [],
       roundEffects: { laoSwapActive: false, coveredAnimal: null },
       pendingVotes: {},
       guesses: { laoGuessXu: null, yaoGuessFang: null, goodGuessLao: {} },
@@ -149,9 +150,12 @@ function ANIMAL(a: AnimalId) { return ['鼠', '牛', '虎', '兔', '龍', '蛇',
 
 function onTurnBegin(s: GameState, p: PlayerId, effects: Effect[]) {
   const idx = s.secret.pendingGank.indexOf(p);
-  if (idx >= 0) {
-    s.secret.pendingGank.splice(idx, 1);
-    if (s.secret.roles[p] === '姬云浮') s.secret.jiPermanentlyDisabled = true;
+  const jiDead = s.secret.roles[p] === '姬云浮' && s.secret.jiPermanentlyDisabled;
+  if (idx >= 0 || jiDead) {
+    if (idx >= 0) {
+      s.secret.pendingGank.splice(idx, 1);
+      if (s.secret.roles[p] === '姬云浮') s.secret.jiPermanentlyDisabled = true;
+    }
     s.secret.turnGanked = true;
     s.public.turn.subStep = 'AWAIT_PASS'; // 不可鑑定、不可發動能力,但仍須派票
     effects.push({ to: p, kind: 'GANKED' });
@@ -316,13 +320,14 @@ export function applyAction(prev: GameState, action: Action): ApplyResult {
     case 'IDENTIFY': {
       if (!isCurrent(action.player) || t.subStep !== 'AWAIT_IDENTIFY') return err(prev, '現在不是你的鑑定步驟');
       if (s.secret.roles[action.player] === '方震') return err(prev, '方震沒有鑑寶能力,請改用查看陣營');
-      const max = s.secret.roles[action.player] === '許願' ? 2 : 1;
-      if (action.animalIds.length < 1 || action.animalIds.length > max) return err(prev, `本回合可鑑定 1–${max} 個獸首`);
+      const need = s.secret.roles[action.player] === '許願' ? 2 : 1;
+      if (action.animalIds.length !== need) return err(prev, need === 2 ? '許願每回合必須鑑定兩個獸首' : '請鑑定一個獸首');
+      if (new Set(action.animalIds).size !== action.animalIds.length) return err(prev, '不可重複選同一個獸首');
       for (const a of action.animalIds) {
         if (!s.public.roundAnimals.includes(a)) return err(prev, '只能鑑定本輪的獸首');
       }
       for (const a of action.animalIds) {
-        effects.push({ to: action.player, kind: 'IDENTIFY_RESULT', animalId: a, result: resolveAppraisal(s, action.player, a) });
+        effects.push({ to: action.player, kind: 'IDENTIFY_RESULT', animalId: a, result: resolveAppraisal(s, action.player, a), round: s.public.roundIndex });
       }
       t.subStep = 'AWAIT_ABILITY';
       return { state: s, effects, ok: true };
@@ -342,7 +347,10 @@ export function applyAction(prev: GameState, action: Action): ApplyResult {
       if (!isCurrent(action.player) || t.subStep !== 'AWAIT_IDENTIFY') return err(prev, '現在不是你的步驟');
       if (s.secret.roles[action.player] !== '方震') return err(prev, '只有方震能查看陣營');
       if (!s.public.seatOrder.includes(action.targetId)) return err(prev, '目標無效');
-      effects.push({ to: action.player, kind: 'FACTION_RESULT', targetId: action.targetId, camp: camp(s.secret.roles[action.targetId]) });
+      if (action.targetId === action.player) return err(prev, '不能查看自己');
+      if (s.secret.fangViewed.includes(action.targetId)) return err(prev, '這位玩家你已經查看過了');
+      s.secret.fangViewed.push(action.targetId);
+      effects.push({ to: action.player, kind: 'FACTION_RESULT', targetId: action.targetId, camp: camp(s.secret.roles[action.targetId]), round: s.public.roundIndex });
       t.subStep = 'AWAIT_ABILITY';
       return { state: s, effects, ok: true };
     }
@@ -352,16 +360,20 @@ export function applyAction(prev: GameState, action: Action): ApplyResult {
       const role = s.secret.roles[action.player];
       if (role === '老朝奉') {
         s.secret.roundEffects.laoSwapActive = true;
+        effects.push({ to: action.player, kind: 'ABILITY_USED', round: s.public.roundIndex, ability: '真假互換' });
       } else if (role === '藥不然') {
         if (!action.targetId || !s.public.seatOrder.includes(action.targetId)) return err(prev, '偷襲目標無效');
+        if (action.targetId === action.player) return err(prev, '不能偷襲自己');
         if (!s.secret.pendingGank.includes(action.targetId)) s.secret.pendingGank.push(action.targetId);
         if (s.secret.roles[action.targetId] === '方震') {
           const xu = playerOfRole(s, '許願');
           if (xu && !s.secret.pendingGank.includes(xu)) s.secret.pendingGank.push(xu); // 連帶偷襲許願
         }
+        effects.push({ to: action.player, kind: 'ABILITY_USED', round: s.public.roundIndex, ability: '偷襲', targetId: action.targetId });
       } else if (role === '鄭國渠') {
         if (action.animalId === undefined || !s.public.roundAnimals.includes(action.animalId)) return err(prev, '覆蓋目標需為本輪獸首');
         s.secret.roundEffects.coveredAnimal = action.animalId;
+        effects.push({ to: action.player, kind: 'ABILITY_USED', round: s.public.roundIndex, ability: '覆蓋', animalId: action.animalId });
       } else {
         return err(prev, '你沒有可發動的能力');
       }

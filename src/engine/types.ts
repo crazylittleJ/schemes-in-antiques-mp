@@ -84,6 +84,7 @@ export interface SecretState {
   blockedRound: Record<PlayerId, number>; // 只對 木戶加奈 / 黃煙煙
   jiPermanentlyDisabled: boolean;
   pendingGank: PlayerId[]; // set(用陣列代表,去重)
+  fangViewed: PlayerId[];   // 方震已查看過的玩家(不可重複查看)
   roundEffects: { laoSwapActive: boolean; coveredAnimal: AnimalId | null };
   pendingVotes: Record<PlayerId, Record<AnimalId, number>>;
   guesses: {
@@ -103,8 +104,9 @@ export interface GameState {
 export type Effect =
   | { to: PlayerId; kind: 'YOUR_ROLE'; role: RoleId; camp: Camp }
   | { to: PlayerId; kind: 'TEAMMATE'; playerId: PlayerId; role: RoleId; name?: string }
-  | { to: PlayerId; kind: 'IDENTIFY_RESULT'; animalId: AnimalId; result: AppraisalResult }
-  | { to: PlayerId; kind: 'FACTION_RESULT'; targetId: PlayerId; camp: Camp }
+  | { to: PlayerId; kind: 'IDENTIFY_RESULT'; animalId: AnimalId; result: AppraisalResult; round: number }
+  | { to: PlayerId; kind: 'FACTION_RESULT'; targetId: PlayerId; camp: Camp; round: number }
+  | { to: PlayerId; kind: 'ABILITY_USED'; round: number; ability: '真假互換' | '偷襲' | '覆蓋'; targetId?: PlayerId; animalId?: AnimalId }
   | { to: PlayerId; kind: 'GANKED' }
   | { to: PlayerId; kind: 'BLOCKED_ROUND'; round: number }
   | { to: PlayerId; kind: 'ERROR'; message: string };

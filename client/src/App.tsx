@@ -81,6 +81,7 @@ export default function App() {
   const [connecting, setConnecting] = useState(true);
   const [showHelp, setShowHelp] = useState(false);
   const [gankedTurn, setGankedTurn] = useState(false); // 本回合被藥不然偷襲
+  const [viewedPlayers, setViewedPlayers] = useState<string[]>([]); // 方震已查看過的玩家
   const [myChips, setMyChips] = useState(0);            // 自己的剩餘籌碼(隱藏資訊,私下取得)
   const [endCountdown, setEndCountdown] = useState<number | null>(null); // 結束後關房倒數
 
@@ -117,13 +118,23 @@ export default function App() {
       location.reload();
     });
     room.onMessage('effect', (e: any) => {
+      const rd = e.round !== undefined ? `第${e.round + 1}輪 ` : '';
       if (e.kind === 'YOUR_ROLE') { setRole(e.role); setPrivLog((l) => [...l, `你的身份:${e.role}`]); }
       else if (e.kind === 'TEAMMATE') { const who = e.name || e.playerId; setTeammate(`${who}(${e.role})`); setPrivLog((l) => [...l, `${who} 是${e.role}(你的隊友)`]); }
-      else if (e.kind === 'IDENTIFY_RESULT') setPrivLog((l) => [...l, `鑑定 ${ANIMALS[e.animalId]} → ${RESULT_TEXT[e.result]}`]);
-      else if (e.kind === 'FACTION_RESULT') { const tn = roomRef.current?.state?.names?.get?.(e.targetId) || e.targetId; setPrivLog((l) => [...l, `${tn} 的陣營:${e.camp === 'GOOD' ? '好人' : '壞人'}`]); }
+      else if (e.kind === 'IDENTIFY_RESULT') setPrivLog((l) => [...l, `${rd}鑑定 ${ANIMALS[e.animalId]} → ${RESULT_TEXT[e.result]}`]);
+      else if (e.kind === 'FACTION_RESULT') {
+        const tn = roomRef.current?.state?.names?.get?.(e.targetId) || e.targetId;
+        setViewedPlayers((v) => (v.includes(e.targetId) ? v : [...v, e.targetId]));
+        setPrivLog((l) => [...l, `${rd}查看 ${tn} → ${e.camp === 'GOOD' ? '好人' : '壞人'}`]);
+      }
+      else if (e.kind === 'ABILITY_USED') {
+        const txt = e.ability === '偷襲' ? `偷襲 ${roomRef.current?.state?.names?.get?.(e.targetId) || e.targetId}`
+          : e.ability === '覆蓋' ? `覆蓋 ${ANIMALS[e.animalId]}`
+          : '發動真假互換';
+        setPrivLog((l) => [...l, `${rd}${txt}`]);
+      }
       else if (e.kind === 'GANKED') setGankedTurn(true);
     });
-    room.onLeave(() => { sessionStorage.removeItem('gudong_reconnect'); });
   }
 
   useEffect(() => {
@@ -145,7 +156,7 @@ export default function App() {
   // 遊戲結束 → 顯示 60 秒關房倒數
   useEffect(() => {
     if (snap?.phase !== 'GAME_END') { setEndCountdown(null); return; }
-    setEndCountdown(60);
+    setEndCountdown(300);
     const t = setInterval(() => setEndCountdown((c) => (c === null ? null : Math.max(0, c - 1))), 1000);
     return () => clearInterval(t);
   }, [snap?.phase]);
@@ -166,9 +177,11 @@ export default function App() {
   }, [connecting]);
 
   async function join() {
+    if (!name || /\s/.test(name)) { flashError('暱稱不可為空,且不能包含空白字元'); return; }
+    if (!password || /\s/.test(password)) { flashError('密碼不可為空,且不能包含空白字元'); return; }
     try {
       setConnecting(true);
-      const room = await clientRef.current!.joinOrCreate('gudong', { name: name || '玩家', password, playerCount, slot });
+      const room = await clientRef.current!.joinOrCreate('gudong', { name, password, playerCount, slot });
       attach(room); setConnecting(false);
     } catch (e: any) { flashError(e?.message || '加入失敗'); setConnecting(false); }
   }
@@ -191,8 +204,8 @@ export default function App() {
           📌 <b>請勿關閉分頁</b>。遊戲進行中切到 LINE、鎖屏或重新整理都沒關係,回來會自動接回(保留約 13 分鐘);但若<b>完全關閉分頁</b>就會離開。房主離開會結束整局。
         </div>
         <p style={{ color: '#888' }}>選一個房間,設定密碼與人數即成為房主;其餘人選同一房間、輸入相同密碼加入。</p>
-        <Field label="暱稱"><input value={name} onChange={(e) => setName(e.target.value)} /></Field>
-        <Field label="房間密碼"><input value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
+        <Field label="暱稱"><input value={name} onChange={(e) => setName(e.target.value)} placeholder="不可空白或含空格" /></Field>
+        <Field label="房間密碼"><input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="不可空白或含空格" /></Field>
 
         <Field label="房間(最多 3 間)">
           <div style={{ display: 'flex', gap: 8 }}>
@@ -287,24 +300,33 @@ export default function App() {
         </div>
       )}
 
-      {/* 行動順序(常駐顯示 + 歷史) */}
+      {/* 遊戲紀錄(行動順序 + 每輪保護寶物得票,公開資訊用藍字) */}
       {(s.actedPlayers.length > 0 || s.turnOrders.length > 0) && (
         <div style={box}>
-          <div><b>本輪行動順序:</b>{
-            (s.phase === 'TURN' ? [...s.actedPlayers, ...(s.currentPlayer ? [s.currentPlayer] : [])] : s.actedPlayers)
-              .map((p, i, arr) => (
-                <span key={p} style={{ fontWeight: p === s.currentPlayer && s.phase === 'TURN' ? 700 : 400 }}>
-                  {nameOf(p)}{p === s.currentPlayer && s.phase === 'TURN' ? '(進行中)' : ''}{i < arr.length - 1 ? ' → ' : ''}
+          <b>遊戲紀錄</b>
+          {s.phase === 'TURN' && (
+            <div style={{ marginTop: 4 }}>本輪行動順序:{
+              [...s.actedPlayers, ...(s.currentPlayer ? [s.currentPlayer] : [])].map((p, i, arr) => (
+                <span key={p} style={{ fontWeight: p === s.currentPlayer ? 700 : 400 }}>
+                  {nameOf(p)}{p === s.currentPlayer ? '(進行中)' : ''}{i < arr.length - 1 ? ' → ' : ''}
                 </span>
               ))
-          }{s.actedPlayers.length === 0 && <span style={{ color: '#999' }}>尚未開始</span>}</div>
-          {s.turnOrders.length > 0 && (
-            <div style={{ marginTop: 6, color: '#777', fontSize: 13 }}>
-              {s.turnOrders.map((ord, i) => (
-                <div key={i}>第 {i + 1} 輪:{ord.map((p) => nameOf(p)).join(' → ')}</div>
-              ))}
-            </div>
+            }{s.actedPlayers.length === 0 && <span style={{ color: '#999' }}>尚未開始</span>}</div>
           )}
+          {s.turnOrders.map((ord, i) => {
+            const vr = s.voteRounds[i];
+            return (
+              <div key={i} style={{ marginTop: 6, borderTop: '1px solid #eee', paddingTop: 6 }}>
+                <div style={{ fontSize: 13, color: '#555' }}>第 {i + 1} 輪 行動:{ord.map((p) => nameOf(p)).join(' → ')}</div>
+                {vr && vr.top.map((a: number) => {
+                  const real = a in s.revealedReal ? (s.revealedReal[a] ? '(真)' : '(假)') : '';
+                  const total = vr.tally[a] || 0;
+                  const voters = vr.breakdown.filter((b: any) => (b.alloc[a] || 0) > 0).map((b: any) => `${nameOf(b.seat)} x${b.alloc[a]}`);
+                  return <div key={a} style={{ color: '#2563eb', fontSize: 13 }}>{ANIMALS[a]}{real} {total}票 — {voters.join('、') || '無人投'}</div>;
+                })}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -324,7 +346,7 @@ export default function App() {
               🚫 你被藥不然偷襲了!本回合無法鑑定、無法發動能力,直接派票即可。
             </div>
           )}
-          {myTurn ? <TurnUI s={s} role={role} mySeat={mySeat} notActed={notActed} others={others} nameOf={nameOf} send={send} />
+          {myTurn ? <TurnUI s={s} role={role} mySeat={mySeat} notActed={notActed} others={others} nameOf={nameOf} send={send} viewedPlayers={viewedPlayers} />
             : <span style={{ color: '#888' }}>輪到 {nameOf(s.currentPlayer)} 行動…</span>}
         </div>
       )}
@@ -344,10 +366,7 @@ export default function App() {
       {s.phase === 'REVEAL' && (
         <div style={box}>
           <div>{s.logLine}</div>
-          <div style={{ marginTop: 6, color: '#555' }}>
-            目前已保護:{s.protectedList.map((pe) => `${ANIMALS[pe.animalId]}${pe.animalId in s.revealedReal ? (s.revealedReal[pe.animalId] ? '(真)' : '(假)') : ''}`).join('、')}
-          </div>
-          {s.voteRounds.length > 0 && <VoteBreakdown vr={s.voteRounds[s.voteRounds.length - 1]} nameOf={nameOf} />}
+          <div style={{ color: '#888', fontSize: 13, marginTop: 4 }}>本輪投票結果已記在上方「遊戲紀錄」。</div>
           <button style={btn} onClick={() => send({ type: 'CONTINUE' })}>繼續</button>
           <div style={{ color: '#888', fontSize: 12 }}>任一玩家按「繼續」即可進入下一階段。</div>
         </div>
@@ -362,7 +381,7 @@ export default function App() {
           <h3>{s.winner === 'GOOD' ? '許願陣營(好人)獲勝!' : '老朝奉陣營(壞人)獲勝!'}</h3>
           <p>好人方最終 {s.finalScore} 分(達 6 分好人勝)。</p>
           <EndDetailView s={s} nameOf={nameOf} />
-          <p style={{ color: '#a11' }}>房間將在 {endCountdown ?? 60} 秒後自動關閉(回到大廳成為空房)。</p>
+          <p style={{ color: '#a11' }}>房間將在 {String(Math.floor((endCountdown ?? 300) / 60)).padStart(2, '0')}:{String((endCountdown ?? 300) % 60).padStart(2, '0')} 後自動關閉(回到大廳成為空房)。</p>
           <button style={btn} onClick={() => { sessionStorage.removeItem('gudong_reconnect'); location.reload(); }}>回到大廳</button>
         </div>
       )}
@@ -378,26 +397,29 @@ export default function App() {
   );
 }
 
-function TurnUI({ s, role, notActed, others, nameOf, send }: any) {
+function TurnUI({ s, role, notActed, others, nameOf, send, viewedPlayers }: any) {
   const [picked, setPicked] = useState<number[]>([]);
   const [abilityTarget, setAbilityTarget] = useState<string | null>(null);
   const [coverAnimal, setCoverAnimal] = useState<number | null>(null);
 
   if (s.subStep === 'AWAIT_IDENTIFY') {
     if (role === '方震') {
-      return <div>查看一位玩家的陣營:{others.map((p: string) => (
-        <button key={p} style={mini} onClick={() => send({ type: 'VIEW_FACTION', targetId: p })}>{nameOf(p)}</button>
-      ))}</div>;
+      const targets = others.filter((p: string) => !viewedPlayers?.includes(p));
+      return <div>查看一位玩家的陣營(已查看過的不再列出):
+        {targets.length === 0 ? <span style={{ color: '#999' }}>所有人都查看過了</span> : targets.map((p: string) => (
+          <button key={p} style={mini} onClick={() => send({ type: 'VIEW_FACTION', targetId: p })}>{nameOf(p)}</button>
+        ))}
+      </div>;
     }
-    const max = role === '許願' ? 2 : 1;
-    const toggle = (a: number) => setPicked((arr) => arr.includes(a) ? arr.filter((x) => x !== a) : arr.length < max ? [...arr, a] : arr);
+    const need = role === '許願' ? 2 : 1;
+    const toggle = (a: number) => setPicked((arr) => arr.includes(a) ? arr.filter((x) => x !== a) : arr.length < need ? [...arr, a] : arr);
     return (
       <div>
-        選擇要鑑定的獸首(最多 {max} 個):
+        {role === '許願' ? '請選擇兩個獸首鑑定:' : '選擇一個獸首鑑定:'}
         {s.roundAnimals.map((a: number) => (
           <button key={a} style={picked.includes(a) ? miniOn : mini} onClick={() => toggle(a)}>{ANIMALS[a]}</button>
         ))}
-        <button disabled={picked.length === 0} style={btn} onClick={() => send({ type: 'IDENTIFY', animalIds: picked })}>鑑定</button>
+        <button disabled={picked.length !== need} style={btn} onClick={() => send({ type: 'IDENTIFY', animalIds: picked })}>鑑定{role === '許願' ? `(${picked.length}/2)` : ''}</button>
       </div>
     );
   }
@@ -411,8 +433,8 @@ function TurnUI({ s, role, notActed, others, nameOf, send }: any) {
     }
     if (role === '藥不然') {
       return <div>
-        選擇偷襲對象:
-        {s.seatOrder.map((p: string) => (
+        選擇偷襲對象(不含自己):
+        {others.map((p: string) => (
           <button key={p} style={abilityTarget === p ? miniOn : mini} onClick={() => setAbilityTarget(p)}>{nameOf(p)}</button>
         ))}
         <div style={{ marginTop: 6 }}>
