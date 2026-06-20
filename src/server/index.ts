@@ -15,7 +15,7 @@ app.get('/healthz', (_req, res) => res.send('ok'));
 app.get('/rooms', async (_req, res) => {
   try {
     const list = await matchMaker.query({ name: 'gudong' });
-    res.json(list.map((r: any) => ({ slot: r.metadata?.slot, clients: r.clients, maxPlayers: r.metadata?.maxPlayers, started: r.metadata?.started })));
+    res.json(list.map((r: any) => ({ slot: r.metadata?.slot, clients: r.clients, maxPlayers: r.metadata?.maxPlayers, started: r.metadata?.started, ended: r.metadata?.ended })));
   } catch { res.json([]); }
 });
 

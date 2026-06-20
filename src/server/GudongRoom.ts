@@ -170,6 +170,7 @@ export class GudongRoom extends Room<GudongState> {
     // 遊戲結束 → 排定 5 分鐘後自動關房(讓房號重新變成空房)
     if (p.phase === 'GAME_END' && !this.endTimer && !this.closing) {
       this.endTimer = setTimeout(() => this.closeRoom('ended'), 5 * 60 * 1000);
+      this.updateMetadata(); // 讓大廳改顯示「已結束」而非「等待中」
     }
 
     replaceArray(st.roundAnimals, p.roundAnimals);
@@ -279,6 +280,7 @@ export class GudongRoom extends Room<GudongState> {
       players: this.state.seatOrder.length,
       maxPlayers: this.targetCount,
       started: this.started,
+      ended: this.state.phase === 'GAME_END',
     });
   }
 

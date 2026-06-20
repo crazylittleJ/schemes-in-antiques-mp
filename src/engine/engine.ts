@@ -153,17 +153,21 @@ function onTurnBegin(s: GameState, p: PlayerId, effects: Effect[]) {
   if (idx >= 0) {
     // 本回合被藥不然偷襲:無法行動,直接派票
     s.secret.pendingGank.splice(idx, 1);
-    if (s.secret.roles[p] === '姬云浮') s.secret.jiPermanentlyDisabled = true;
+    const isJi = s.secret.roles[p] === '姬云浮';
+    if (isJi) s.secret.jiPermanentlyDisabled = true;
     s.secret.turnGanked = true;
     s.public.turn.subStep = 'AWAIT_PASS';
     effects.push({ to: p, kind: 'GANKED' });
-    effects.push({ to: p, kind: 'TURN_RECORD', round: s.public.roundIndex, text: '被藥不然偷襲,本回合無法行動' });
+    effects.push({
+      to: p, kind: 'TURN_RECORD', round: s.public.roundIndex,
+      text: isJi ? '你被藥不然偷襲了,接下來的回合將無法鑑定' : '被藥不然偷襲,本回合無法行動',
+    });
   } else if (s.secret.roles[p] === '姬云浮' && s.secret.jiPermanentlyDisabled) {
     // 被偷襲後永久失能:之後每輪都無法鑑定,直接派票
     s.secret.turnGanked = false;
     s.public.turn.subStep = 'AWAIT_PASS';
     effects.push({ to: p, kind: 'JI_DISABLED' });
-    effects.push({ to: p, kind: 'TURN_RECORD', round: s.public.roundIndex, text: '無法鑑定(被藥不然偷襲後永久失能)' });
+    effects.push({ to: p, kind: 'TURN_RECORD', round: s.public.roundIndex, text: '無法鑑定' });
   } else {
     s.secret.turnGanked = false;
     s.public.turn.subStep = 'AWAIT_IDENTIFY';

@@ -221,7 +221,7 @@ export default function App() {
         {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
         <h1>古董局中局</h1>
         <div style={{ background: '#fff3d6', border: '1px solid #e6c14d', color: '#7a5b00', borderRadius: 8, padding: '10px 12px', margin: '8px 0', fontSize: 14 }}>
-          📌 重新整理、切到 LINE、鎖屏都沒關係——回來會用你的<b>暱稱+密碼自動接回原座位</b>(可能需等幾秒讓伺服器確認舊連線已離線)。請盡量別<b>完全關閉分頁</b>。房主離開會結束整局。
+          📌 重新整理、切到 LINE、鎖屏都沒關係——回來會用你的<b>暱稱+密碼自動接回原座位</b>(可能需等幾秒讓伺服器確認舊連線已離線;若沒馬上回到、停在「房間準備」畫面,<b>再重新整理一次</b>即可)。請盡量別<b>完全關閉分頁</b>。房主離開會結束整局。
         </div>
         <p style={{ color: '#888' }}>選一個房間,設定密碼與人數即成為房主;其餘人選同一房間、輸入相同密碼加入。</p>
         <Field label="暱稱"><input value={name} onChange={(e) => setName(e.target.value)} placeholder="不可空白或含空格" /></Field>
@@ -233,8 +233,11 @@ export default function App() {
               const r = rooms.find((x) => x.slot === n);
               const occupied = !!r;
               const started = r?.started;
+              const ended = r?.ended;
               const cnt = r?.clients ?? 0;
               const maxp = r?.maxPlayers ?? 8;
+              const statusText = !occupied ? '空房' : ended ? '已結束,即將關閉' : started ? `進行中 (${cnt}人)` : `等待中 ${cnt}/${maxp}`;
+              const statusColor = !occupied ? '#999' : ended ? '#a11' : started ? '#a11' : '#2a7';
               return (
                 <button key={n} onClick={() => setSlot(n)} style={{
                   flex: 1, padding: '8px 6px', borderRadius: 8, cursor: 'pointer', fontSize: 13,
@@ -242,9 +245,7 @@ export default function App() {
                   background: slot === n ? '#eaf1ff' : '#fafafa',
                 }}>
                   <div style={{ fontWeight: 700 }}>房間 {n}</div>
-                  <div style={{ color: occupied ? (started ? '#a11' : '#2a7') : '#999', fontSize: 12 }}>
-                    {occupied ? (started ? `進行中 (${cnt}人)` : `等待中 ${cnt}/${maxp}`) : '空房'}
-                  </div>
+                  <div style={{ color: statusColor, fontSize: 12 }}>{statusText}</div>
                 </button>
               );
             })}
@@ -277,7 +278,9 @@ export default function App() {
         <span style={{ color: '#888' }}>
           {phaseLabel(s.phase)} · 第 {s.roundIndex + 1} 輪
           <button style={textBtn} onClick={() => setShowHelp(true)}>說明</button>
-          <button style={textBtn} onClick={leaveGame}>{isHost ? '離開房間' : '離開'}</button>
+          {isHost && s.phase === 'GAME_END'
+            ? <button style={{ ...textBtn, color: '#bbb', cursor: 'not-allowed' }} disabled title="遊戲已結束,請用下方「關閉房間並回到大廳」">離開房間</button>
+            : <button style={textBtn} onClick={leaveGame}>{isHost ? '離開房間' : '離開'}</button>}
         </span>
       </header>
       {error && <p style={{ color: 'crimson' }}>{error}</p>}
@@ -363,12 +366,14 @@ export default function App() {
         <div style={box}>
           {myTurn && gankedTurn && (
             <div style={{ background: '#fde2e2', border: '1px solid #f5a3a3', color: '#a11', borderRadius: 6, padding: '8px 10px', marginBottom: 8, fontWeight: 700 }}>
-              🚫 你被藥不然偷襲了!本回合無法鑑定、無法發動能力,直接派票即可。
+              🚫 {role === '姬云浮'
+                ? '你被藥不然偷襲了,接下來的回合將無法鑑定。本回合直接派票即可。'
+                : '你被藥不然偷襲了!本回合無法鑑定、無法發動能力,直接派票即可。'}
             </div>
           )}
           {myTurn && !gankedTurn && jiDisabledTurn && (
             <div style={{ background: '#fdeedd', border: '1px solid #f0c089', color: '#9a5b00', borderRadius: 6, padding: '8px 10px', marginBottom: 8, fontWeight: 700 }}>
-              🚫 你已被藥不然偷襲而永久失能,本回合無法鑑定,直接派票即可。
+              🚫 無法鑑定,本回合直接派票即可。
             </div>
           )}
           {myTurn ? <TurnUI s={s} role={role} mySeat={mySeat} notActed={notActed} others={others} nameOf={nameOf} send={send} viewedPlayers={viewedPlayers} />
@@ -646,9 +651,10 @@ function HelpModal({ onClose }: { onClose: () => void }) {
         <p>同時最多開 <b>3 個房間</b>。登入畫面會顯示房間 1、2、3 的狀態(空房 / 等待中 / 進行中)。選一個空房並設密碼即成為該房房主;要加入別人的房,選同一個房號、輸入相同密碼即可。房主斷線想重開時,也可以改用另一個空房號。</p>
 
         <h3>暫離與重連</h3>
-        <p><b>短暫斷線 / 重整 / 鎖屏 / 切到別的 App:</b>伺服器會幫你保留座位<b>約 13 分鐘</b>。在這段時間內回來(或重新整理頁面),會自動回到原座位,並補回身份與紀錄——所以中途滑去看 LINE、網路抖一下、不小心重整都沒關係,房主也一樣。</p>
-        <p><b>注意:</b>重連資訊存在這個分頁裡,<b>完全關掉分頁</b>就會清掉,無法再自動回座。手機鎖屏、切到別的 App 通常分頁還在,不受影響。</p>
-        <p><b>主動「離開」:</b>一般玩家在大廳離開會直接釋放座位,讓別人能補進;遊戲<b>進行中</b>離開則會保留座位、標記為離線(避免破壞回合資料)。若剛好輪到離線的人,回合會卡住,這時請房主用「離開房間」結束重開,或由房主重開一局。</p>
+        <p><b>短暫斷線 / 重整 / 鎖屏 / 切到別的 App:</b>回到頁面(或重新整理)時,系統會用你的<b>暱稱 + 密碼自動接回原座位</b>,並補回身份與紀錄——中途滑去看 LINE、網路抖一下、不小心重整都沒關係,房主也一樣。只要房間還在(沒被房主關閉、也還沒閒置自動關),你的座位就保留著。</p>
+        <p><b>重整小提醒:</b>重整後可能要等幾秒,讓伺服器確認你舊的連線已離線,才接得回來;若你<b>停在「房間準備、等待房主開始」</b>的畫面、沒看到自己的座位,<b>再重新整理一次</b>就會回到原位。</p>
+        <p><b>注意:</b>登入資訊存在這個分頁裡,<b>完全關掉分頁</b>就會清掉,無法再自動回座(但只要房間還在,重新打開、輸入相同暱稱+密碼也能接管原座位)。手機鎖屏、切到別的 App 通常分頁還在,不受影響。</p>
+        <p><b>主動「離開」:</b>一般玩家在大廳離開會直接釋放座位,讓別人能補進;遊戲<b>進行中</b>離開則會保留座位、標記為離線(避免破壞回合資料)。<b>房主</b>主動離開則會<b>立即結束整局、關閉房間</b>。遊戲結束畫面請房主改用下方的「關閉房間並回到大廳」來關房、釋放房號。</p>
       </div>
     </div>
   );
