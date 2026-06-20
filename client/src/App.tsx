@@ -8,8 +8,8 @@ const ROLE_DESC: Record<string, string> = {
   黃煙煙: '隨機某一輪無法鑑定。',
   木戶加奈: '隨機某一輪無法鑑定。',
   姬云浮: '鑑定不受老朝奉影響;但若被藥不然偷襲將永久無法鑑定。',
-  老朝奉: '壞人首領。發動後,順位在你之後的好人鑑定真假互換。',
-  藥不然: '發動後可偷襲一名玩家,使其下回合無法行動。偷襲方震會連帶許願。',
+  老朝奉: '壞人首領。發動後,順位在你之後的好人(除姬云浮)鑑定真假互換;壞人與姬云浮不受影響。',
+  藥不然: '發動後可偷襲一名玩家,使其下回合無法行動;偷襲到順序在你之前的玩家,效果延續到下一輪。偷襲方震會連帶許願。',
   鄭國渠: '不知隊友。發動後覆蓋一個寶物,之後鑑定該寶物者只看到無法鑑定。',
 };
 
@@ -340,7 +340,7 @@ export default function App() {
             <div style={{ marginTop: 4 }}>本輪行動順序:{
               [...s.actedPlayers, ...(s.currentPlayer ? [s.currentPlayer] : [])].map((p, i, arr) => (
                 <span key={p} style={{ fontWeight: p === s.currentPlayer ? 700 : 400 }}>
-                  {nameOf(p)}{p === s.currentPlayer ? '(進行中)' : ''}{i < arr.length - 1 ? ' → ' : ''}
+                  {nameOf(p)}{p === mySeat ? '(自己)' : ''}{p === s.currentPlayer ? '(進行中)' : ''}{i < arr.length - 1 ? ' → ' : ''}
                 </span>
               ))
             }{s.actedPlayers.length === 0 && <span style={{ color: '#999' }}>尚未開始</span>}</div>
@@ -349,7 +349,7 @@ export default function App() {
             const vr = s.voteRounds[i];
             return (
               <div key={i} style={{ marginTop: 6, borderTop: '1px solid #eee', paddingTop: 6 }}>
-                <div style={{ fontSize: 13, color: '#555' }}>第 {i + 1} 輪 行動:{ord.map((p) => nameOf(p)).join(' → ')}</div>
+                <div style={{ fontSize: 13, color: '#555' }}>第 {i + 1} 輪 行動:{ord.map((p) => `${nameOf(p)}${p === mySeat ? '(自己)' : ''}`).join(' → ')}</div>
                 {vr && vr.top.map((a: number) => {
                   const real = a in s.revealedReal ? (s.revealedReal[a] ? '(真)' : '(假)') : '';
                   const total = vr.tally[a] || 0;
@@ -467,7 +467,11 @@ export default function App() {
 
       {/* 公開訊息 + 私密歷史 */}
       <div style={{ color: '#999', fontSize: 13, marginTop: 8 }}>📢 {s.logLine}</div>
-      {privLog.length > 0 && <div style={{ fontSize: 13, marginTop: 4 }}>📝 {privLog[privLog.length - 1]}</div>}
+      {privLog.length > 0 && (
+        <div style={{ fontSize: 13, marginTop: 4 }}>
+          {latestBatch(privLog).map((l, i) => <div key={i}>📝 {l}</div>)}
+        </div>
+      )}
       <details style={{ marginTop: 8 }}>
         <summary style={{ cursor: 'pointer', color: '#888' }}>我的紀錄</summary>
         {privLog.map((l, i) => <div key={i} style={{ fontSize: 13 }}>{l}</div>)}
@@ -671,7 +675,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
           <li><RoleName n="方震" />:無鑑寶能力,但每回合可查看一位玩家的陣營(好/壞)。</li>
           <li><RoleName n="木戶加奈" /> / <RoleName n="黃煙煙" />:系統隨機指定某一輪鑑定失敗;該輪不論點哪個寶物都只顯示「無法鑑定」,和被<RoleName n="鄭國渠" />覆蓋的寶物一樣,<b>無法分辨</b>是哪種原因。沒有可發動的能力。</li>
           <li><RoleName n="姬云浮" />:鑑定不受<RoleName n="老朝奉" />影響;但若被<RoleName n="藥不然" />偷襲,將永久無法鑑定。</li>
-          <li><RoleName n="老朝奉" />:壞人首領，技能發動後,順位在他之後的好人鑑定真假互換(本質不變)。<b>壞人陣營則不受影響。</b></li>
+          <li><RoleName n="老朝奉" />:壞人首領，技能發動後,順位在他之後的好人(除<RoleName n="姬云浮" />)鑑定真假互換(本質不變)。<b>壞人陣營和好人陣營中的<RoleName n="姬云浮" />則不受影響。</b></li>
           <li><RoleName n="藥不然" />:發動後偷襲一名玩家,使其無法行動;偷襲<RoleName n="方震" />會連帶偷襲<RoleName n="許願" />。<b>被偷襲者會收到明顯提示</b>若偷襲行動順序在藥不然前面的玩家，效果會延續至下一輪。</li>
           <li><RoleName n="鄭國渠" />:發動後覆蓋一個寶物,之後鑑定該寶物者只能看到「無法鑑定」。</li>
         </ul>
@@ -698,6 +702,20 @@ function HelpModal({ onClose }: { onClose: () => void }) {
       </div>
     </div>
   );
+}
+
+// 取「最近這一批」私訊紀錄:從尾端往前,收集與最後一筆同一輪(同「第N輪」前綴)的連續紀錄。
+// 許願一回合鑑定兩個會有兩筆,需一起顯示;沒有輪次前綴(如身份)則只取最後一筆。
+function latestBatch(log: string[]): string[] {
+  if (log.length === 0) return [];
+  const pref = (l: string) => l.match(/^第\d+輪/)?.[0] ?? null;
+  const last = pref(log[log.length - 1]);
+  if (!last) return [log[log.length - 1]];
+  const out: string[] = [];
+  for (let i = log.length - 1; i >= 0; i--) {
+    if (pref(log[i]) === last) out.unshift(log[i]); else break;
+  }
+  return out;
 }
 
 function phaseLabel(p: string) {

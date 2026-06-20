@@ -65,14 +65,14 @@ export function setupGame(seatOrder: PlayerId[], rng: RNG = Math.random): { stat
     }
   }
 
-  // 獸首配置:每輪 [真,真,假,假] 洗牌;12 獸首隨機分派到三組,組內生肖排序
+  // 獸首配置:12 獸首隨機分派到三組,組內維持「抽出順序」(此順序即平票時的優先序);每輪 [真,真,假,假] 洗牌
   const allAnimals = shuffle([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], rng);
   const roundLayout: AnimalId[][] = [];
   const treasures: Record<AnimalId, { round: number; isReal: boolean }> = {} as any;
   for (let r = 0; r < 3; r++) {
-    const group = allAnimals.slice(r * 4, r * 4 + 4).sort((a, b) => a - b);
+    const group = allAnimals.slice(r * 4, r * 4 + 4); // 保留抽出順序,不排序
     roundLayout.push(group);
-    const reals = shuffle([true, true, false, false], rng); // 對應排序後位置
+    const reals = shuffle([true, true, false, false], rng); // 對應抽出順序位置
     group.forEach((a, i) => (treasures[a] = { round: r, isReal: reals[i] }));
   }
 
@@ -198,9 +198,9 @@ export function resolveAppraisal(s: GameState, p: PlayerId, animalId: AnimalId):
   if (!canIdentifyThisTurn(s, p)) return 'UNIDENTIFIABLE';
   if (s.secret.roundEffects.coveredAnimal === animalId) return 'UNIDENTIFIABLE';
   let base: AppraisalResult = s.secret.treasures[animalId].isReal ? 'REAL' : 'FAKE';
-  // 老朝奉發動真假互換後,順位在他之後鑑定的玩家(姬云浮免疫除外)都會看到互換的結果,
-  // 包含壞人鄭國渠在內;老朝奉本人先鑑定後才發動,因此不受影響。
-  if (s.secret.roundEffects.laoSwapActive && s.secret.roles[p] !== '姬云浮') {
+  // 老朝奉發動真假互換後,順位在他之後鑑定的「好人(姬云浮除外)」會看到互換的結果;
+  // 壞人陣營(藥不然、鄭國渠)與好人陣營中的姬云浮都不受影響;老朝奉本人先鑑定後才發動,亦不受影響。
+  if (s.secret.roundEffects.laoSwapActive && camp(s.secret.roles[p]) === 'GOOD' && s.secret.roles[p] !== '姬云浮') {
     base = base === 'REAL' ? 'FAKE' : 'REAL';
   }
   return base;
@@ -234,8 +234,9 @@ function doReveal(s: GameState) {
     for (const a of s.public.roundAnimals) { const v = alloc[a] || 0; tally[a] += v; used += v; }
     s.public.chips[p] -= used; // 未用的留到下一輪
   }
-  // 票數降冪,平票時生肖索引升冪
-  const ranked = s.public.roundAnimals.slice().sort((a, b) => (tally[b] - tally[a]) || (a - b));
+  // 票數降冪;平票時以「本輪出現順序」(roundAnimals 中位置)靠前者為高票
+  const order = s.public.roundAnimals;
+  const ranked = order.slice().sort((a, b) => (tally[b] - tally[a]) || (order.indexOf(a) - order.indexOf(b)));
   const top1 = ranked[0], top2 = ranked[1];
   s.public.protected.push({ animalId: top1, round: s.public.roundIndex, realRevealed: false });
   s.public.protected.push({ animalId: top2, round: s.public.roundIndex, realRevealed: true });

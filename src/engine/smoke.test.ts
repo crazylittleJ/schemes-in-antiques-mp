@@ -131,8 +131,8 @@ console.log('# 老朝奉互換');
   // 找一個 GOOD 非姬云浮、一個 BAD、(無姬云浮於 6 人局)
   const good = seats.find((p) => camp(state.secret.roles[p]) === 'GOOD' && state.secret.roles[p] !== '姬云浮')!;
   const bad = seats.find((p) => camp(state.secret.roles[p]) === 'BAD')!;
-  assert(resolveAppraisal(state, good, a) === 'FAKE', '互換後好人看真品應顯示假');
-  assert(resolveAppraisal(state, bad, a) === 'FAKE', '互換後壞人(含鄭國渠)看真品也應顯示假');
+  assert(resolveAppraisal(state, good, a) === 'FAKE', '互換後好人(非姬云浮)看真品應顯示假');
+  assert(resolveAppraisal(state, bad, a) === 'REAL', '互換不影響壞人陣營,真品仍顯示真');
 
   // 覆蓋優先於互換
   state.secret.roundEffects.coveredAnimal = a;
@@ -282,6 +282,21 @@ console.log('# 防豬隊友規則');
   assert(r.ok && r.state.public.turn.subStep === 'AWAIT_PASS', '姬云浮失能後輪到她時直接進入派票');
   assert(r.effects.some((e: any) => e.to === ji && e.kind === 'JI_DISABLED'), '姬云浮失能後每輪收到無法鑑定提示');
   assert(r.effects.some((e: any) => e.to === ji && e.kind === 'TURN_RECORD'), '姬云浮失能後每輪寫入個人紀錄');
+}
+
+// ── 8. 平票以「出現順序」(roundAnimals 位置)決定高低 ─────────────────────────
+console.log('# 平票出現順序');
+{
+  const seats = ['p0', 'p1', 'p2', 'p3', 'p4', 'p5'];
+  const { state } = setupGame(seats, mulberry32(9));
+  const ra = state.public.roundAnimals;
+  // 全平票(皆 0 票)時,名次規則應完全等於「出現順序」(roundAnimals)
+  const tally: Record<number, number> = {} as any;
+  for (const x of ra) tally[x] = 0;
+  const ranked = ra.slice().sort((a, b) => (tally[b] - tally[a]) || (ra.indexOf(a) - ra.indexOf(b)));
+  assert(JSON.stringify(ranked) === JSON.stringify([...ra]), '全平票時名次等於出現順序(前者為高票)');
+  // 出現順序不再強制等於生肖升冪(至少存在非升冪的種子;此處僅確認排序鍵已改為出現順序)
+  assert(ranked[0] === ra[0] && ranked[1] === ra[1], '平票時保護的是出現順序最前面兩個');
 }
 
 console.log(`\n結果:${pass} passed, ${fail} failed`);

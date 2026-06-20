@@ -18,7 +18,7 @@
 
 ### 1.1 生肖獸首 (treasures)
 
-索引 0..11 為**鑑定固定順序**,也是**平票時的優先序**(索引小 = 票數視為較高)。
+索引 0..11 僅為獸首編號。**平票時的優先序改以「本輪抽出(顯示)順序」**——`roundAnimals` 中較前面者視為較高票(此順序玩家看得到)。
 
 ```
 ANIMALS = [鼠, 牛, 虎, 兔, 龍, 蛇, 馬, 羊, 猴, 雞, 狗, 豬]   // index 0..11
@@ -83,7 +83,7 @@ GameState {
     connected: { [PlayerId]: boolean }  // 斷線/重連狀態(Colyseus onDrop/onReconnect 維護)
 
     roundIndex: 0 | 1 | 2
-    roundAnimals: AnimalId[]            // 本輪 4 獸首,生肖排序;身份公開、真偽不在此公開
+    roundAnimals: AnimalId[]            // 本輪 4 獸首,抽出順序(即平票優先序);身份公開、真偽不在此公開
 
     // 回合進行
     turn: {
@@ -113,7 +113,7 @@ GameState {
 
     // 獸首真偽全表(不變式:6 真6 假;每輪 2 真2 假)
     treasures: { [AnimalId]: { round: 0|1|2, isReal: boolean } }
-    roundLayout: AnimalId[][]           // roundLayout[r] = 該輪 4 獸首(生肖排序)
+    roundLayout: AnimalId[][]           // roundLayout[r] = 該輪 4 獸首(抽出順序,即平票優先序)
 
     // 木戶加奈 / 黃煙煙 的「隨機某輪無法鑑定」
     blockedRound: { [PlayerId]: 0|1|2 } // 只對這兩角設定
@@ -178,7 +178,7 @@ GameState {
 
 - 全 12 獸首恰好 **6 真 6 假**。
 - 切成 3 組(= 3 輪),每組 4 個,**每組恰好 2 真 2 假**。
-- 每組內以生肖索引升冪排序 → `roundLayout[r]`(供顯示與平票優先序)。
+- 每組內**維持抽出順序**(不另排序)→ `roundLayout[r]`(此順序即顯示順序與平票優先序)。
 
 產生方式(等價於原 repo 的做法):先決定每輪的 `[真,真,假,假]` 並各自洗牌,再把 12 獸首隨機分派到三組、組內排序。結果寫入 `secret.treasures` 與 `secret.roundLayout`。
 
@@ -348,8 +348,8 @@ phase = SPEECH
 tally[a] = Σ_p pendingVotes[p][a]          // 各獸首總票數
 for p: chips[p] -= sum(pendingVotes[p])    // 用掉的扣除;未用的留到下一輪(ROUND_START 再 +2)
 
-// 排序:票數降冪;平票時生肖索引升冪者視為較高
-ranked = sortByVotesDescThenAnimalIndexAsc(roundAnimals)
+// 排序:票數降冪;平票時以 roundAnimals「出現順序」靠前者視為較高
+ranked = sortByVotesDescThenAppearanceOrder(roundAnimals)
 top1 = ranked[0]; top2 = ranked[1]
 
 protected += { top1, round, realRevealed: false }   // 第一高票:真偽此時不公開
