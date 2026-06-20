@@ -101,16 +101,13 @@ export default function App() {
 
   function attach(room: Room) {
     roomRef.current = room;
-    sessionStorage.setItem('gudong_reconnect', room.reconnectionToken);
-    room.onStateChange((s: any) => {
-      setSnap(snapshot(s));
-      sessionStorage.setItem('gudong_reconnect', room.reconnectionToken);
-    });
+    sessionStorage.setItem('gudong_active', '1');
+    room.onStateChange((s: any) => { setSnap(snapshot(s)); });
     room.onMessage('seat', (m: any) => { setMySeat(m.seatId); setIsHost(m.isHost); });
     room.onMessage('mychips', (n: any) => setMyChips(Number(n) || 0));
     room.onMessage('error', (m: any) => flashError(m.message));
     room.onMessage('room_closed', (m: any) => {
-      sessionStorage.removeItem('gudong_reconnect');
+      sessionStorage.removeItem('gudong_active');
       const msg = m?.reason === 'timeout' ? '房間閒置過久,已自動關閉。'
         : m?.reason === 'ended' ? '遊戲已結束,房間已關閉。'
         : '房主已關閉房間。';
@@ -140,23 +137,16 @@ export default function App() {
   useEffect(() => {
     const client = new Client(endpoint());
     clientRef.current = client;
-    const token = sessionStorage.getItem('gudong_reconnect');
-    if (!token) { setConnecting(false); return; }
-    let cancelled = false;
-    (async () => {
-      // 重整時舊連線的關閉事件伺服器可能還沒處理完,首次重連會「token 失效」;重試幾次即可
-      for (let i = 0; i < 8 && !cancelled; i++) {
-        try {
-          const room = await client.reconnect(token);
-          if (!cancelled) { attach(room); setConnecting(false); }
-          return;
-        } catch {
-          await new Promise((r) => setTimeout(r, 500));
-        }
-      }
-      if (!cancelled) { sessionStorage.removeItem('gudong_reconnect'); setConnecting(false); }
-    })();
-    return () => { cancelled = true; };
+    const active = sessionStorage.getItem('gudong_active');
+    const nm = sessionStorage.getItem('gudong_name');
+    const pw = sessionStorage.getItem('gudong_pw');
+    const sl = Number(sessionStorage.getItem('gudong_slot')) || 1;
+    if (active && nm && pw) {
+      // 重整/重連:用記住的暱稱+密碼自動回到原房間,伺服器會讓你接管原座位
+      client.joinOrCreate('gudong', { name: nm, password: pw, slot: sl, playerCount: 8 })
+        .then((room) => { attach(room); setConnecting(false); })
+        .catch(() => { sessionStorage.removeItem('gudong_active'); setConnecting(false); });
+    } else setConnecting(false);
   }, []);
 
   // 我的回合結束就清掉「被偷襲」提示
@@ -204,7 +194,7 @@ export default function App() {
   function leaveGame() {
     const msg = isHost ? '你是房主,離開將結束整局並關閉房間,確定?' : '確定離開遊戲?';
     if (!confirm(msg)) return;
-    sessionStorage.removeItem('gudong_reconnect');
+    sessionStorage.removeItem('gudong_active');
     roomRef.current?.leave(true);
     location.reload();
   }
@@ -397,7 +387,7 @@ export default function App() {
           <p>好人方最終 {s.finalScore} 分(達 6 分好人勝)。</p>
           <EndDetailView s={s} nameOf={nameOf} />
           <p style={{ color: '#a11' }}>房間將在 {String(Math.floor((endCountdown ?? 300) / 60)).padStart(2, '0')}:{String((endCountdown ?? 300) % 60).padStart(2, '0')} 後自動關閉(回到大廳成為空房)。</p>
-          <button style={btn} onClick={() => { sessionStorage.removeItem('gudong_reconnect'); location.reload(); }}>回到大廳</button>
+          <button style={btn} onClick={() => { sessionStorage.removeItem('gudong_active'); location.reload(); }}>回到大廳</button>
         </div>
       )}
 

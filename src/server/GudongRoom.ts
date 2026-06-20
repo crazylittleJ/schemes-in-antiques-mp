@@ -8,6 +8,7 @@ interface JoinOptions { name?: string; password?: string; playerCount?: number; 
 // 一桌一局的房間。免費層、單一房間的用法下,狀態存記憶體即可。
 export class GudongRoom extends Room<GudongState> {
   maxClients = 8;
+  autoDispose = false; // 不因暫時無人而銷毀;由閒置(30分)/結束(5分)/房主關閉控制,確保斷線座位可被接管
 
   private password = '';
   private targetCount = 8;
@@ -59,13 +60,32 @@ export class GudongRoom extends Room<GudongState> {
     if (!name || /\s/.test(name)) throw new Error('暱稱不可為空,且不能包含空白字元');
     if (!password || /\s/.test(password)) throw new Error('密碼不可為空,且不能包含空白字元');
     if (password !== this.password) throw new Error('密碼錯誤');
-    if (this.started) throw new Error('遊戲已開始,無法加入');
-    if ([...this.state.names.values()].includes(name)) throw new Error('暱稱已被使用,請換一個');
+    // 同名座位:仍連線中 → 拒絕;已斷線(灰色)→ 允許接管(重整/重連後備,即使遊戲已開始)
+    const dup = [...this.state.names.entries()].find(([, nm]) => nm === name)?.[0];
+    if (dup) {
+      if (this.state.connected.get(dup) !== false) throw new Error('暱稱已被使用,請換一個');
+      return true;
+    }
+    if (this.started) throw new Error('遊戲已開始,無法加入'); // 全新玩家不能中途加入
     return true;
   }
 
   onJoin(client: Client, options: JoinOptions) {
     this.touch();
+    const name = options.name || '';
+    // 接管同名的斷線座位(重整/重連後備)→ 還原原座位、身份與私訊紀錄
+    const reclaim = [...this.state.names.entries()].find(([seat, nm]) => nm === name && this.state.connected.get(seat) === false)?.[0];
+    if (reclaim) {
+      this.sessionToSeat.set(client.sessionId, reclaim);
+      this.state.connected.set(reclaim, true);
+      if (this.engine) this.engine.public.connected[reclaim] = true;
+      client.send('seat', { seatId: reclaim, isHost: reclaim === this.hostSeat });
+      for (const e of this.privateLog[reclaim] ?? []) client.send('effect', e); // 補送私訊歷史
+      this.sendTurnStatus(client, reclaim);
+      this.sync();
+      this.updateMetadata();
+      return;
+    }
     const seat = `seat${this.nextSeatNum++}`;
     this.sessionToSeat.set(client.sessionId, seat);
     this.privateLog[seat] = [];
@@ -171,34 +191,21 @@ export class GudongRoom extends Room<GudongState> {
     }
   }
 
-  // ── 重連 / 離開 ────────────────────────────────────────────────────────
-  // 非自願斷線 → 保留座位等重連;自願離開 → 依階段釋放座位或標記離線。
-  async onLeave(client: Client, consented: boolean) {
+  // ── 離開 ──────────────────────────────────────────────────────────────
+  // 非自願斷線(重整/掉線)→ 僅標記離線,保留座位等「同名+密碼」回來接管;
+  // 自願離開 → 依階段釋放座位或標記離線。房間不自動銷毀(autoDispose=false),由閒置/結束/房主關閉控制。
+  onLeave(client: Client, consented: boolean) {
     const seat = this.sessionToSeat.get(client.sessionId);
-    if (this.closing) return; // 關房中,不做重連等待
+    if (this.closing) return;
 
     if (seat) {
       this.state.connected.set(seat, false);
       if (this.engine) this.engine.public.connected[seat] = false;
+      this.sessionToSeat.delete(client.sessionId); // 解除舊 session 對應;座位仍保留供接管
     }
     this.updateMetadata();
 
-    if (consented) { this.handleConsentedLeave(client, seat); return; }
-
-    try {
-      await this.allowReconnection(client, 800); // 給 800 秒重連(滑去看訊息/切 App 也不會掉)
-      if (seat) {
-        this.state.connected.set(seat, true);
-        if (this.engine) this.engine.public.connected[seat] = true;
-        client.send('seat', { seatId: seat, isHost: seat === this.hostSeat });
-        for (const e of this.privateLog[seat] ?? []) client.send('effect', e); // 補送私訊歷史
-        this.sendTurnStatus(client, seat); // 依當前回合補送「被偷襲」提示
-        this.sync(); // 重連後補送一次(含私下票數)
-        this.updateMetadata();
-      }
-    } catch {
-      // 超時未回:保留座位(回合制,可由其他人代為推進);此處不移除
-    }
+    if (consented) this.handleConsentedLeave(client, seat);
   }
 
   // 自願離開遊戲
