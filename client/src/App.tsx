@@ -206,6 +206,13 @@ export default function App() {
     } catch (e: any) { flashError(e?.message || '加入失敗'); setConnecting(false); }
   }
   const send = (payload: any) => roomRef.current?.send('action', payload);
+  function moveSeat(i: number, dir: -1 | 1) {
+    const order = [...(snap?.seatOrder ?? [])];
+    const j = i + dir;
+    if (j < 0 || j >= order.length) return;
+    [order[i], order[j]] = [order[j], order[i]];
+    roomRef.current?.send('reorder', { order });
+  }
   function leaveGame() {
     const msg = isHost ? '你是房主,離開將結束整局並關閉房間,確定?' : '確定離開遊戲?';
     if (!confirm(msg)) return;
@@ -285,7 +292,8 @@ export default function App() {
       </header>
       {error && <p style={{ color: 'crimson' }}>{error}</p>}
 
-      {/* 玩家列 */}
+      {/* 玩家列(遊戲中顯示;大廳改由下方座位順序面板呈現) */}
+      {s.phase !== 'LOBBY' && (
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '8px 0' }}>
         {s.seatOrder.map((p) => {
           const isMe = p === mySeat, isCur = p === s.currentPlayer;
@@ -303,6 +311,7 @@ export default function App() {
           );
         })}
       </div>
+      )}
 
       {/* 我的私密資訊 */}
       {role && (
@@ -356,9 +365,39 @@ export default function App() {
       {/* === 各階段 === */}
       {s.phase === 'LOBBY' && (
         <div style={box}>
-          已入座 {s.seatOrder.length} 人。{isHost
-            ? <button style={btn} onClick={() => roomRef.current?.send('start')}>開始遊戲</button>
-            : <span style={{ color: '#888' }}>等待房主開始…</span>}
+          {isHost ? (
+            <>
+              <b>排定座位順序(順時針)</b>
+              <div style={{ color: '#777', fontSize: 13, margin: '4px 0 8px' }}>
+                請依你們實際入座的順時針順序排好——這會決定遊戲的<b>行動順序與發言順序</b>。用右側 ↑ ↓ 調整。
+              </div>
+              {s.seatOrder.map((p, i) => (
+                <div key={p} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderTop: i ? '1px solid #f0f0f0' : 'none' }}>
+                  <span style={{ width: 22, color: '#999', textAlign: 'right' }}>{i + 1}.</span>
+                  <span style={{ flex: 1, fontWeight: p === mySeat ? 700 : 400, opacity: s.connected[p] === false ? 0.45 : 1 }}>
+                    {p === s.hostSeat ? '👑 ' : ''}{nameOf(p)}{p === mySeat ? '(你)' : ''}{s.connected[p] === false ? '(離線)' : ''}
+                  </span>
+                  <button style={mini} disabled={i === 0} onClick={() => moveSeat(i, -1)}>↑</button>
+                  <button style={mini} disabled={i === s.seatOrder.length - 1} onClick={() => moveSeat(i, 1)}>↓</button>
+                </div>
+              ))}
+              <div style={{ marginTop: 10 }}>
+                已入座 {s.seatOrder.length} 人(需 6–8 人)。
+                <button style={btn} onClick={() => roomRef.current?.send('start')}>開始遊戲</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <b>座位順序</b>
+              <div style={{ color: '#777', fontSize: 13, margin: '4px 0 8px' }}>房主正在排定座位;行動與發言將依此順序進行:</div>
+              {s.seatOrder.map((p, i) => (
+                <div key={p} style={{ padding: '3px 0', opacity: s.connected[p] === false ? 0.45 : 1, fontWeight: p === mySeat ? 700 : 400 }}>
+                  {i + 1}. {p === s.hostSeat ? '👑 ' : ''}{nameOf(p)}{p === mySeat ? '(你)' : ''}
+                </div>
+              ))}
+              <div style={{ marginTop: 8, color: '#888' }}>已入座 {s.seatOrder.length} 人,等待房主開始…</div>
+            </>
+          )}
         </div>
       )}
 
@@ -644,6 +683,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
 
         <h3>房主與關閉房間</h3>
         <p>第一個進房的人是<b>房主</b>,名字旁會顯示一個皇冠 👑,只有房主能按「開始遊戲」。</p>
+        <p>開始前,房主可在等待畫面用 ↑ ↓ <b>排定座位順序</b>,請依大家實際入座的<b>順時針順序</b>排好——這會決定遊戲的<b>行動順序與發言順序</b>。其他玩家會即時看到這個順序。</p>
         <p>房主右上角的按鈕是<b>「離開房間」</b>:房主一旦主動離開,<b>整局立即結束、所有人退回大廳</b>(房主不會轉移給別人)。卡關或想重來時,由房主按它最快。一般玩家的按鈕則是「離開」,只會讓自己退出。</p>
         <p>注意:這只針對<b>主動按離開</b>。房主若只是網路抖動、重整或鎖屏,屬於暫離(見下),不會結束遊戲——伺服器會保留房主席位等他回來。</p>
 

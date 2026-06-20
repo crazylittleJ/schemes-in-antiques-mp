@@ -55,6 +55,22 @@ export class GudongRoom extends Room<GudongState> {
       if (seat !== this.hostSeat) return this.sendError(client, '只有房主能開始遊戲');
       this.startGame(client);
     });
+    // 房主在開始前排定座位(順時針)順序 → 影響行動與發言順序
+    this.onMessage('reorder', (client, payload: { order?: string[] }) => {
+      this.touch();
+      const seat = this.sessionToSeat.get(client.sessionId);
+      if (seat !== this.hostSeat) return this.sendError(client, '只有房主能排定座位順序');
+      if (this.started) return this.sendError(client, '遊戲已開始,無法調整座位順序');
+      const cur = [...this.state.seatOrder];
+      const next = Array.isArray(payload?.order) ? payload!.order! : [];
+      // 必須是現有座位的「排列」(同一組、不重不漏)
+      if (next.length !== cur.length || [...next].sort().join(',') !== [...cur].sort().join(',')) {
+        return this.sendError(client, '座位順序無效');
+      }
+      this.state.seatOrder.clear();
+      for (const sId of next) this.state.seatOrder.push(sId);
+      this.updateMetadata();
+    });
     // 房主關閉房間:踢出所有人並銷毀房間
     this.onMessage('close', (client) => {
       const seat = this.sessionToSeat.get(client.sessionId);
