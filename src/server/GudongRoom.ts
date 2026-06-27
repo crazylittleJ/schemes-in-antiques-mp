@@ -102,17 +102,19 @@ export class GudongRoom extends Room<GudongState> {
       if (payload?.seat) this.removeBot(payload.seat);
     });
 
-    // v2:玩家互動聊天。只有「輪到你發言」時才允許送出(發言階段且輪到你)。
+    // v2:玩家發言。只有「輪到你發言」時才允許(發言階段且輪到你)。一次一句、上限 150 字,送出後自動換下一位。
     this.onMessage('chat', (client, payload: { text?: string }) => {
       this.touch();
       const seat = this.sessionToSeat.get(client.sessionId);
-      if (!seat) return;
-      const text = (payload?.text || '').trim().slice(0, 120);
+      if (!seat || !this.engine) return;
+      const text = (payload?.text || '').trim().slice(0, 150);
       if (!text) return;
-      const sp = this.engine?.public.speech;
-      const myTurn = this.engine?.public.phase === 'SPEECH' && sp && sp.order[sp.pointer] === seat;
+      const sp = this.engine.public.speech;
+      const myTurn = this.engine.public.phase === 'SPEECH' && sp && sp.order[sp.pointer] === seat;
       if (!myTurn) return this.sendError(client, '現在還沒輪到你發言');
-      this.pushChat(seat, text, 'chat');
+      this.pushChat(seat, text, 'speech');
+      const res = applyAction(this.engine, { type: 'SPEECH_DONE', player: seat }); // 一句即完成發言,換下一位
+      if (res.ok) { this.engine = res.state; this.routeEffects(res.effects); this.sync(); void this.driveBots(); }
     });
   }
 
@@ -180,8 +182,9 @@ export class GudongRoom extends Room<GudongState> {
   // ── AI bot 管理 ───────────────────────────────────────────────────────
   private addBot(host: Client) {
     if (this.state.seatOrder.length >= this.targetCount) return this.sendError(host, '座位已滿');
-    const persona = PERSONAS.find((p) => !this.usedPersonaIds.has(p.id));
-    if (!persona) return this.sendError(host, '沒有可用的 AI 角色了');
+    const pool = PERSONAS.filter((p) => !this.usedPersonaIds.has(p.id));
+    if (pool.length === 0) return this.sendError(host, '沒有可用的 AI 角色了');
+    const persona = pool[Math.floor(Math.random() * pool.length)]; // 12 人中隨機、不重複
     const seat = `seat${this.nextSeatNum++}`;
     this.usedPersonaIds.add(persona.id);
     this.botSeats.add(seat);

@@ -131,7 +131,7 @@ export async function generateSpeech(v: BotView): Promise<{ text: string; though
     chatHistory: recentChat(v),
   });
   const g = await geminiSpeech(system, user);
-  if (g && g.result) return { text: g.result.slice(0, 80), thought: g.thought };
+  if (g && g.result) return { text: g.result.replace(/\s+/g, ' ').trim().slice(0, 150), thought: g.thought };
   return { text: heuristicSpeech(v, intel) };
 }
 

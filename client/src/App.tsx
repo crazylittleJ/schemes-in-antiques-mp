@@ -312,7 +312,7 @@ export default function App() {
               opacity: s.connected[p] === false ? 0.4 : 1,
               display: 'inline-flex', alignItems: 'center', gap: 4,
             }}>
-              <Avatar seat={p} s={s} size={18} />{p === s.hostSeat ? '👑' : ''}{isMe ? '⭐' : ''}{nameOf(p)}{isMe ? '(自己)' : ''}
+              <Avatar seat={p} s={s} size={26} />{p === s.hostSeat ? '👑' : ''}{isMe ? '⭐' : ''}{nameOf(p)}{isMe ? '(自己)' : ''}
             </span>
           );
         })}
@@ -380,7 +380,7 @@ export default function App() {
               {s.seatOrder.map((p, i) => (
                 <div key={p} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderTop: i ? '1px solid #f0f0f0' : 'none' }}>
                   <span style={{ width: 22, color: '#999', textAlign: 'right' }}>{i + 1}.</span>
-                  <Avatar seat={p} s={s} size={26} />
+                  <Avatar seat={p} s={s} size={40} />
                   <span style={{ flex: 1, fontWeight: p === mySeat ? 700 : 400, opacity: s.connected[p] === false ? 0.45 : 1 }}>
                     {p === s.hostSeat ? '👑 ' : ''}{nameOf(p)}{p === mySeat ? '(自己)' : ''}{s.connected[p] === false ? '(離線)' : ''}
                   </span>
@@ -404,7 +404,7 @@ export default function App() {
               <div style={{ color: '#777', fontSize: 13, margin: '4px 0 8px' }}>房主正在排定座位；行動與發言將依此順序進行：</div>
               {s.seatOrder.map((p, i) => (
                 <div key={p} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0', opacity: s.connected[p] === false ? 0.45 : 1, fontWeight: p === mySeat ? 700 : 400 }}>
-                  <span style={{ color: '#999' }}>{i + 1}.</span><Avatar seat={p} s={s} size={24} />
+                  <span style={{ color: '#999' }}>{i + 1}.</span><Avatar seat={p} s={s} size={36} />
                   <span>{p === s.hostSeat ? '👑 ' : ''}{nameOf(p)}{p === mySeat ? '(自己)' : ''}</span>
                 </div>
               ))}
@@ -719,16 +719,28 @@ function HelpModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-// v2:座位頭像(AI 有圖,真人顯示名字首字圓形)
+// v2:座位頭像(AI 有圖 + 右上角機器人標記;真人顯示名字首字圓形)
 function Avatar({ seat, s, size }: { seat: string; s: Snap; size: number }) {
   const url = s.avatars[seat];
   const nm = s.names[seat] || seat;
-  if (url) return <img src={url} alt={nm} style={{ width: size, height: size, borderRadius: '50%', objectFit: 'cover', flex: '0 0 auto' }} />;
-  const ch = (nm.match(/[A-Za-z0-9\u4e00-\u9fff]/)?.[0] || '?').toUpperCase();
+  const isBot = !!s.bots[seat];
+  const inner = url
+    ? <img src={url} alt={nm} style={{ width: size, height: size, borderRadius: '50%', objectFit: 'cover', display: 'block' }} />
+    : <span style={{ width: size, height: size, borderRadius: '50%', background: '#c9d4e6', color: '#33415e',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: size * 0.5, fontWeight: 700 }}>
+        {(nm.match(/[A-Za-z0-9\u4e00-\u9fff]/)?.[0] || '?').toUpperCase()}
+      </span>;
+  if (!isBot) return <span style={{ flex: '0 0 auto', display: 'inline-block', width: size, height: size }}>{inner}</span>;
+  const badge = Math.max(12, Math.round(size * 0.42));
   return (
-    <span style={{ width: size, height: size, borderRadius: '50%', background: '#c9d4e6', color: '#33415e',
-      display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: size * 0.5, fontWeight: 700, flex: '0 0 auto' }}>
-      {ch}
+    <span style={{ position: 'relative', flex: '0 0 auto', display: 'inline-block', width: size, height: size }}>
+      {inner}
+      <span title="AI 玩家" style={{
+        position: 'absolute', top: -badge * 0.25, right: -badge * 0.25,
+        width: badge, height: badge, borderRadius: '50%', background: '#2d6cdf', color: '#fff',
+        border: '1.5px solid #fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: badge * 0.62, lineHeight: 1,
+      }}>🤖</span>
     </span>
   );
 }
@@ -748,11 +760,11 @@ function ChatPanel({ s, mySeat, onSend }: { s: Snap; mySeat: string; nameOf: (id
         {s.chat.map((m, i) => {
           const mine = m.seat === mySeat;
           return (
-            <div key={i} style={{ display: 'flex', flexDirection: mine ? 'row-reverse' : 'row', gap: 8, alignItems: 'flex-end' }}>
-              <Avatar seat={m.seat} s={s} size={30} />
-              <div style={{ maxWidth: '74%' }}>
+            <div key={i} style={{ display: 'flex', flexDirection: mine ? 'row-reverse' : 'row', gap: 10, alignItems: 'flex-end' }}>
+              <Avatar seat={m.seat} s={s} size={52} />
+              <div style={{ maxWidth: '72%' }}>
                 <div style={{ fontSize: 11, color: '#999', textAlign: mine ? 'right' : 'left', marginBottom: 2 }}>
-                  {m.name}{m.isBot ? ' 🤖' : ''} · 第{m.round + 1}輪{m.kind === 'speech' ? '・發言' : ''}
+                  {m.name} · 第{m.round + 1}輪{m.kind === 'speech' ? '・發言' : ''}
                 </div>
                 <div style={{
                   background: mine ? '#2d6cdf' : (m.isBot ? '#eef1f6' : '#fff'),
@@ -772,13 +784,13 @@ function ChatPanel({ s, mySeat, onSend }: { s: Snap; mySeat: string; nameOf: (id
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
           disabled={!myTurn}
-          placeholder={myTurn ? '輪到你發言,輸入訊息…' : '只有輪到你發言時才能輸入'}
-          maxLength={120}
+          placeholder={myTurn ? '輪到你發言,輸入一句話(最多 150 字)…' : '只有輪到你發言時才能輸入'}
+          maxLength={150}
           style={{ flex: 1, padding: '8px 10px', borderRadius: 8, border: '1px solid #ccc', fontSize: 14, background: myTurn ? '#fff' : '#f1f1f1' }}
         />
         <button style={{ ...btn, opacity: myTurn ? 1 : 0.5 }} disabled={!myTurn} onClick={submit}>送出</button>
       </div>
-      {myTurn && <div style={{ color: '#888', fontSize: 12, marginTop: 4 }}>可輸入多句與 AI 互動;講完後按「發言完畢」換下一位。</div>}
+      {myTurn && <div style={{ color: '#888', fontSize: 12, marginTop: 4 }}>你的發言為一句話(上限 150 字);送出後即輪到下一位。不想發言可按上方「發言完畢」。{text.length > 0 && ` (${text.length}/150)`}</div>}
     </div>
   );
 }
