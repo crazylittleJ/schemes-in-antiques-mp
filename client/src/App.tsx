@@ -389,7 +389,7 @@ export default function App() {
           ) : (
             <>
               <b>座位順序</b>
-              <div style={{ color: '#777', fontSize: 13, margin: '4px 0 8px' }}>房主正在排定座位；行動與發言將依此順序進行；</div>
+              <div style={{ color: '#777', fontSize: 13, margin: '4px 0 8px' }}>房主正在排定座位；行動與發言將依此順序進行：</div>
               {s.seatOrder.map((p, i) => (
                 <div key={p} style={{ padding: '3px 0', opacity: s.connected[p] === false ? 0.45 : 1, fontWeight: p === mySeat ? 700 : 400 }}>
                   {i + 1}. {p === s.hostSeat ? '👑 ' : ''}{nameOf(p)}{p === mySeat ? '(自己)' : ''}
@@ -676,7 +676,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
           <li><RoleName n="木戶加奈" /> / <RoleName n="黃煙煙" />：系統隨機指定某一輪鑑定失敗；該輪不論點哪個寶物都只顯示「無法鑑定」和被<RoleName n="鄭國渠" />覆蓋的寶物一樣，<b>無法分辨</b>是哪種原因，沒有可發動的能力。</li>
           <li><RoleName n="姬云浮" />：鑑定不受<RoleName n="老朝奉" />影響；但若被<RoleName n="藥不然" />偷襲，將永久無法鑑定。</li>
           <li><RoleName n="老朝奉" />：壞人首領，技能發動後，行動順序在他之後的玩家鑑定真假互換(本質不變)，<b>壞人陣營和好人陣營中的<RoleName n="姬云浮" />則不受影響。</b></li>
-          <li><RoleName n="藥不然" />：發動後偷襲一名玩家，「使其無法行動；偷襲<RoleName n="方震" />會連帶偷襲<RoleName n="許願" />。<b>被偷襲者會收到明顯提示</b>，若偷襲行動順序在藥不然前面的玩家，效果會延續至下一輪。</li>
+          <li><RoleName n="藥不然" />：發動後偷襲一名玩家，使其無法行動；偷襲<RoleName n="方震" />會連帶偷襲<RoleName n="許願" />。<b>被偷襲者會收到明顯提示</b>，若偷襲行動順序在藥不然前面的玩家，效果會延續至下一輪。</li>
           <li><RoleName n="鄭國渠" />：發動後覆蓋一個寶物，之後鑑定該寶物者只能看到「無法鑑定」。</li>
         </ul>
         <p><b>計分(好人方)：</b>每保護一個真品 +1；<RoleName n="許願" />沒被<RoleName n="老朝奉" />找到 +2；<RoleName n="方震" />沒被<RoleName n="藥不然" />找到 +1；過半(含半數)好人找到<RoleName n="老朝奉" /> +1。總分 ≥ 6 好人勝，否則壞人勝。</p>
