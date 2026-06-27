@@ -12,5 +12,5 @@
     "resolveJsonModule": true
   },
   "include": ["src/engine/**/*.ts", "src/server/**/*.ts"],
-  "exclude": ["src/engine/smoke.test.ts", "node_modules"]
+  "exclude": ["src/engine/smoke.test.ts", "src/server/bot.test.ts", "node_modules"]
 }

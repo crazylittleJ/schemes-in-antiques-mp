@@ -8,6 +8,18 @@ export class ProtectedEntrySchema extends Schema {
 }
 defineTypes(ProtectedEntrySchema, { animalId: 'number', round: 'number', realRevealed: 'boolean' });
 
+// v2.0.0 — 聊天/發言訊息(像通訊軟體那樣呈現,持續記錄到遊戲結束)
+export class ChatMsgSchema extends Schema {
+  seat = '';      // 發話座位
+  name = '';      // 顯示名稱(AI 會是 Leo(AI))
+  avatar = '';    // 頭像路徑(AI 才有;人類為空)
+  text = '';      // 內容
+  round = 0;      // 發生在第幾輪(0..2)
+  isBot = false;  // 是否 AI
+  kind = 'chat';  // 'speech'(輪到的正式發言) | 'chat'(互動訊息)
+}
+defineTypes(ChatMsgSchema, { seat: 'string', name: 'string', avatar: 'string', text: 'string', round: 'number', isBot: 'boolean', kind: 'string' });
+
 export class GudongState extends Schema {
   phase = 'LOBBY';
   playerCount = 0;
@@ -17,6 +29,9 @@ export class GudongState extends Schema {
   hostSeat = '';                          // 房主座位(公開,供顯示皇冠)
   names = new MapSchema<string>();        // seatId -> 顯示名稱
   connected = new MapSchema<boolean>();   // seatId -> 連線中
+  bots = new MapSchema<boolean>();        // seatId -> 是否 AI bot
+  avatars = new MapSchema<string>();      // seatId -> 頭像路徑(AI 才有)
+  chat = new ArraySchema<ChatMsgSchema>(); // 全房聊天/發言紀錄(累積到結束)
 
   roundAnimals = new ArraySchema<number>();
 
@@ -49,6 +64,9 @@ defineTypes(GudongState, {
   hostSeat: 'string',
   names: { map: 'string' },
   connected: { map: 'boolean' },
+  bots: { map: 'boolean' },
+  avatars: { map: 'string' },
+  chat: [ChatMsgSchema],
   roundAnimals: ['number'],
   startPlayer: 'string',
   currentPlayer: 'string',

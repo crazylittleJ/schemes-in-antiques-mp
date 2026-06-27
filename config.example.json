@@ -1,0 +1,4 @@
+{
+  "geminiApiKey": "在此填入你的 Google Gemini API 金鑰(或改用環境變數 GEMINI_API_KEY)",
+  "geminiModel": "gemini-2.5-flash-lite"
+}

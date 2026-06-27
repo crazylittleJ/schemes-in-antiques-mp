@@ -1,7 +1,9 @@
 import { Room, Client } from 'colyseus';
-import { GudongState, ProtectedEntrySchema } from './schema';
-import { setupGame, applyAction, turnStatusFor } from '../engine/engine';
-import { Action, Effect, GameState, PlayerId } from '../engine/types';
+import { GudongState, ProtectedEntrySchema, ChatMsgSchema } from './schema';
+import { setupGame, applyAction, turnStatusFor, camp } from '../engine/engine';
+import { Action, Effect, GameState, PlayerId, RoleId, Camp } from '../engine/types';
+import { PERSONAS, Persona, aiDisplayName, isReservedName } from './personas';
+import { BotView, botCandidates, generateSpeech } from './bot';
 
 interface JoinOptions { name?: string; password?: string; playerCount?: number; slot?: number; }
 
@@ -24,6 +26,12 @@ export class GudongRoom extends Room<GudongState> {
   private endTimer?: ReturnType<typeof setTimeout>;   // 遊戲結束 60 秒後自動關房
   private closing = false;                  // 正在關閉房間時跳過重連邏輯
   private readonly IDLE_MS = 30 * 60 * 1000; // 閒置 30 分鐘自動關閉房間
+
+  private botSeats = new Set<PlayerId>();   // 哪些座位是 AI bot
+  private botPersona: Record<PlayerId, Persona> = {}; // bot 座位 -> 人設
+  private usedPersonaIds = new Set<string>(); // 已被佔用的人設 id(避免重複)
+  private botBusy = false;                   // driveBots 重入防護
+  private botRerun = false;                  // driveBots 進行中又被觸發 → 收尾後再跑一輪
 
   onCreate(options: JoinOptions) {
     this.password = options.password ?? '';
@@ -77,6 +85,35 @@ export class GudongRoom extends Room<GudongState> {
       if (seat !== this.hostSeat) return this.sendError(client, '只有房主能關閉房間');
       this.closeRoom('host');
     });
+
+    // v2:房主在大廳加入/移除 AI bot
+    this.onMessage('add_bot', (client) => {
+      this.touch();
+      const seat = this.sessionToSeat.get(client.sessionId);
+      if (seat !== this.hostSeat) return this.sendError(client, '只有房主能加入 AI');
+      if (this.started) return this.sendError(client, '遊戲已開始,無法加入 AI');
+      this.addBot(client);
+    });
+    this.onMessage('remove_bot', (client, payload: { seat?: string }) => {
+      this.touch();
+      const seat = this.sessionToSeat.get(client.sessionId);
+      if (seat !== this.hostSeat) return this.sendError(client, '只有房主能移除 AI');
+      if (this.started) return this.sendError(client, '遊戲已開始,無法移除 AI');
+      if (payload?.seat) this.removeBot(payload.seat);
+    });
+
+    // v2:玩家互動聊天。只有「輪到你發言」時才允許送出(發言階段且輪到你)。
+    this.onMessage('chat', (client, payload: { text?: string }) => {
+      this.touch();
+      const seat = this.sessionToSeat.get(client.sessionId);
+      if (!seat) return;
+      const text = (payload?.text || '').trim().slice(0, 120);
+      if (!text) return;
+      const sp = this.engine?.public.speech;
+      const myTurn = this.engine?.public.phase === 'SPEECH' && sp && sp.order[sp.pointer] === seat;
+      if (!myTurn) return this.sendError(client, '現在還沒輪到你發言');
+      this.pushChat(seat, text, 'chat');
+    });
   }
 
   // 密碼驗證(0.17 簽名:onAuth(client, options, context))
@@ -85,6 +122,7 @@ export class GudongRoom extends Room<GudongState> {
     const password = options.password || '';
     if (!name || /\s/.test(name)) throw new Error('暱稱不可為空,且不能包含空白字元');
     if (!password || /\s/.test(password)) throw new Error('密碼不可為空,且不能包含空白字元');
+    if (isReservedName(name)) throw new Error('這個暱稱保留給 AI 玩家,請換一個');
     if (password !== this.password) throw new Error('密碼錯誤');
     // 同名座位:仍連線中 → 拒絕;已斷線(灰色)→ 允許接管(重整/重連後備,即使遊戲已開始)
     const dup = [...this.state.names.entries()].find(([, nm]) => nm === name)?.[0];
@@ -124,7 +162,9 @@ export class GudongRoom extends Room<GudongState> {
   private startGame(host: Client) {
     if (this.started) return;
     const seats = [...this.state.seatOrder];
-    if (seats.length < 6 || seats.length > 8) return this.sendError(host, '需要 6–8 名玩家');
+    if (seats.length < 6 || seats.length > 8) return this.sendError(host, '需要 6–8 名玩家(可含 AI)');
+    const humans = seats.filter((s) => !this.botSeats.has(s));
+    if (humans.length < 1) return this.sendError(host, '至少要有 1 位真人玩家');
     this.targetCount = seats.length;
     this.started = true;
     this.state.playerCount = seats.length;
@@ -134,6 +174,54 @@ export class GudongRoom extends Room<GudongState> {
     this.updateMetadata();
     this.routeEffects(effects);
     this.sync();
+    void this.driveBots();
+  }
+
+  // ── AI bot 管理 ───────────────────────────────────────────────────────
+  private addBot(host: Client) {
+    if (this.state.seatOrder.length >= this.targetCount) return this.sendError(host, '座位已滿');
+    const persona = PERSONAS.find((p) => !this.usedPersonaIds.has(p.id));
+    if (!persona) return this.sendError(host, '沒有可用的 AI 角色了');
+    const seat = `seat${this.nextSeatNum++}`;
+    this.usedPersonaIds.add(persona.id);
+    this.botSeats.add(seat);
+    this.botPersona[seat] = persona;
+    this.privateLog[seat] = [];
+    this.state.seatOrder.push(seat);
+    this.state.names.set(seat, aiDisplayName(persona)); // Leo(AI)
+    this.state.connected.set(seat, true);
+    this.state.bots.set(seat, true);
+    this.state.avatars.set(seat, persona.avatar);
+    this.updateMetadata();
+  }
+
+  private removeBot(seat: PlayerId) {
+    if (!this.botSeats.has(seat)) return;
+    const i = this.state.seatOrder.indexOf(seat);
+    if (i >= 0) this.state.seatOrder.splice(i, 1);
+    const pid = this.botPersona[seat]?.id;
+    if (pid) this.usedPersonaIds.delete(pid);
+    this.botSeats.delete(seat);
+    delete this.botPersona[seat];
+    delete this.privateLog[seat];
+    this.state.names.delete(seat);
+    this.state.connected.delete(seat);
+    this.state.bots.delete(seat);
+    this.state.avatars.delete(seat);
+    this.updateMetadata();
+  }
+
+  // 推一則聊天/發言到全房紀錄(累積到結束)
+  private pushChat(seat: PlayerId, text: string, kind: 'speech' | 'chat') {
+    const m = new ChatMsgSchema();
+    m.seat = seat;
+    m.name = this.state.names.get(seat) ?? seat;
+    m.avatar = this.state.avatars.get(seat) ?? '';
+    m.text = text;
+    m.round = this.engine?.public.roundIndex ?? 0;
+    m.isBot = this.botSeats.has(seat);
+    m.kind = kind;
+    this.state.chat.push(m);
   }
 
   private handleAction(client: Client, payload: Omit<Action, 'player'>) {
@@ -146,6 +234,109 @@ export class GudongRoom extends Room<GudongState> {
     this.engine = res.state;
     this.routeEffects(res.effects);
     this.sync();
+    void this.driveBots();
+  }
+
+  // ── 驅動 AI bot 行動(非同步;含發言可能呼叫 Gemini)──────────────────────
+  private async driveBots() {
+    if (!this.engine || this.closing) return;
+    if (this.botSeats.size === 0) return;
+    // 進行中若再被呼叫(例如人類剛行動讓輪到 bot),記下重跑旗標,避免漏掉觸發
+    if (this.botBusy) { this.botRerun = true; return; }
+    this.botBusy = true;
+    try {
+      do {
+        this.botRerun = false;
+        let guard = 0;
+        while (guard++ < 300) {
+          if (this.closing || !this.engine) break;
+          const seat = this.nextBotToAct();
+          if (!seat) break;
+          const wait = process.env.BOT_FAST === '1' ? 5 : (this.engine.public.phase === 'REVEAL' ? 2500 : 700 + Math.floor(Math.random() * 900));
+          await delay(wait);
+          if (this.closing || !this.engine) break;
+          // 狀態可能在等待期間被人類改變;重新確認此 bot 仍該行動
+          if (this.nextBotToAct() !== seat) continue;
+          await this.driveOneBot(seat);
+          this.sync();
+        }
+      } while (this.botRerun); // 期間有新觸發 → 再跑一輪把新輪到的 bot 處理掉
+    } finally {
+      this.botBusy = false;
+    }
+  }
+
+  // 找出「現在輪到、且是 bot」的座位;沒有則回 null
+  private nextBotToAct(): PlayerId | null {
+    if (!this.engine) return null;
+    const p = this.engine.public;
+    const isBot = (s: PlayerId) => this.botSeats.has(s);
+    if (p.phase === 'TURN' && p.turn.currentPlayer && isBot(p.turn.currentPlayer)) return p.turn.currentPlayer;
+    if (p.phase === 'SPEECH' && p.speech) {
+      const cur = p.speech.order[p.speech.pointer];
+      if (cur && isBot(cur)) return cur;
+    }
+    if (p.phase === 'VOTE') {
+      const pv = this.engine.secret.pendingVotes;
+      for (const s of p.seatOrder) if (isBot(s) && !(s in pv)) return s;
+    }
+    if (p.phase === 'REVEAL') {
+      // 有真人在場時,讓真人按「繼續」掌握節奏;只有沒人在時才讓 bot 自動繼續,避免卡關
+      if (this.humansConnected() === 0) {
+        for (const s of p.seatOrder) if (isBot(s)) return s;
+      }
+    }
+    if (p.phase === 'IDENTITY_REVEAL') {
+      const g = this.engine.secret.guesses;
+      for (const s of p.seatOrder) {
+        if (!isBot(s)) continue;
+        const role = this.engine.secret.roles[s];
+        if (role === '老朝奉' && g.laoGuessXu === null) return s;
+        if (role === '藥不然' && g.yaoGuessFang === null) return s;
+        if (camp(role) === 'GOOD' && !(s in g.goodGuessLao)) return s;
+      }
+    }
+    return null;
+  }
+
+  private async driveOneBot(seat: PlayerId) {
+    if (!this.engine) return;
+    const p = this.engine.public;
+    // 發言階段:先生成發言、貼到聊天,再送 SPEECH_DONE
+    if (p.phase === 'SPEECH' && p.speech && p.speech.order[p.speech.pointer] === seat) {
+      let text = '……';
+      try {
+        const out = await generateSpeech(this.buildBotView(seat));
+        text = out.text || text;
+      } catch { /* 發言失敗就用預設,不卡關 */ }
+      if (!this.engine) return;
+      this.pushChat(seat, text, 'speech');
+      const res = applyAction(this.engine, { type: 'SPEECH_DONE', player: seat });
+      if (res.ok) { this.engine = res.state; this.routeEffects(res.effects); }
+      return;
+    }
+    // 其餘:依序嘗試候選動作,第一個合法的就採用
+    const cands = botCandidates(this.buildBotView(seat));
+    for (const a of cands) {
+      const res = applyAction(this.engine, a);
+      if (res.ok) { this.engine = res.state; this.routeEffects(res.effects); return; }
+    }
+  }
+
+  private buildBotView(seat: PlayerId): BotView {
+    const eng = this.engine!;
+    const role = eng.secret.roles[seat] as RoleId;
+    return {
+      seat,
+      role,
+      camp: camp(role) as Camp,
+      pub: eng.public,
+      myLog: this.privateLog[seat] ?? [],
+      chips: eng.public.chips[seat] ?? 0,
+      nameOf: (id) => this.state.names.get(id) ?? id,
+      displayName: this.state.names.get(seat) ?? seat,
+      chat: this.state.chat.map((m) => ({ name: m.name, text: m.text, round: m.round })),
+    };
   }
 
   // 把引擎的私訊副作用發給對應的 client,並記錄供重連補送
@@ -254,6 +445,18 @@ export class GudongRoom extends Room<GudongState> {
     }
     this.updateMetadata();
     this.touch();
+    // v2:遊戲進行中若已無任何真人在場,不讓 bot 自己跑整局佔資源 → 關房
+    if (this.started && this.humansConnected() === 0) this.closeRoom('timeout');
+  }
+
+  // 目前仍連線的「真人」座位數(排除 bot)
+  private humansConnected(): number {
+    let n = 0;
+    for (const s of this.state.seatOrder) {
+      if (this.botSeats.has(s)) continue;
+      if (this.state.connected.get(s) === true) n++;
+    }
+    return n;
   }
 
   // 閒置計時:任何活動都重置;到時自動關房
@@ -316,4 +519,7 @@ function syncBoolMap(m: any, obj: Record<number, boolean>) {
 function syncNumMap(m: any, obj: Record<number, number>) {
   m.clear?.();
   for (const [k, v] of Object.entries(obj)) m.set(k, v);
+}
+function delay(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }

@@ -1,6 +1,6 @@
 {
   "name": "gudong-mp",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "description": "古董局中局 多人連線版 (Colyseus + React,單一 Render service)",
   "engines": {
@@ -13,7 +13,7 @@
     "build:server": "tsc -p tsconfig.server.json",
     "build": "npm run build:client && npm run build:server",
     "start": "node dist/server/index.js",
-    "test": "tsx src/engine/smoke.test.ts"
+    "test": "tsx src/engine/smoke.test.ts && tsx src/server/bot.test.ts"
   },
   "dependencies": {
     "@colyseus/schema": "^3.0.0",

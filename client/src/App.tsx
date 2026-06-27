@@ -35,6 +35,8 @@ interface EndDetailSnap {
 interface Snap {
   phase: string; playerCount: number; roundIndex: number;
   seatOrder: string[]; names: Record<string, string>; connected: Record<string, boolean>;
+  bots: Record<string, boolean>; avatars: Record<string, string>;
+  chat: { seat: string; name: string; avatar: string; text: string; round: number; isBot: boolean; kind: string }[];
   hostSeat: string;
   roundAnimals: number[];
   currentPlayer: string; subStep: string; actedPlayers: string[]; lastPlayer: string;
@@ -53,6 +55,8 @@ function snapshot(s: any): Snap {
   return {
     phase: s.phase, playerCount: s.playerCount, roundIndex: s.roundIndex,
     seatOrder: Array.from(s.seatOrder ?? []), names: mapToObj(s.names), connected: mapToObj(s.connected),
+    bots: mapToObj(s.bots), avatars: mapToObj(s.avatars),
+    chat: Array.from(s.chat ?? []).map((m: any) => ({ seat: m.seat, name: m.name, avatar: m.avatar, text: m.text, round: m.round, isBot: m.isBot, kind: m.kind })),
     hostSeat: s.hostSeat ?? '',
     roundAnimals: Array.from(s.roundAnimals ?? []),
     currentPlayer: s.currentPlayer, subStep: s.subStep, actedPlayers: Array.from(s.actedPlayers ?? []), lastPlayer: s.lastPlayer,
@@ -206,6 +210,7 @@ export default function App() {
     } catch (e: any) { flashError(e?.message || '加入失敗'); setConnecting(false); }
   }
   const send = (payload: any) => roomRef.current?.send('action', payload);
+  const sendChat = (text: string) => roomRef.current?.send('chat', { text });
   function moveSeat(i: number, dir: -1 | 1) {
     const order = [...(snap?.seatOrder ?? [])];
     const j = i + dir;
@@ -305,8 +310,9 @@ export default function App() {
               border: isMe ? '2px solid #f59e0b' : '2px solid transparent',
               fontWeight: isMe ? 700 : 400,
               opacity: s.connected[p] === false ? 0.4 : 1,
+              display: 'inline-flex', alignItems: 'center', gap: 4,
             }}>
-              {p === s.hostSeat ? '👑' : ''}{isMe ? '⭐ ' : ''}{nameOf(p)}{isMe ? '(自己)' : ''}
+              <Avatar seat={p} s={s} size={18} />{p === s.hostSeat ? '👑' : ''}{isMe ? '⭐' : ''}{nameOf(p)}{isMe ? '(自己)' : ''}
             </span>
           );
         })}
@@ -374,15 +380,21 @@ export default function App() {
               {s.seatOrder.map((p, i) => (
                 <div key={p} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderTop: i ? '1px solid #f0f0f0' : 'none' }}>
                   <span style={{ width: 22, color: '#999', textAlign: 'right' }}>{i + 1}.</span>
+                  <Avatar seat={p} s={s} size={26} />
                   <span style={{ flex: 1, fontWeight: p === mySeat ? 700 : 400, opacity: s.connected[p] === false ? 0.45 : 1 }}>
                     {p === s.hostSeat ? '👑 ' : ''}{nameOf(p)}{p === mySeat ? '(自己)' : ''}{s.connected[p] === false ? '(離線)' : ''}
                   </span>
-                  <button style={mini} disabled={i === 0} onClick={() => moveSeat(i, -1)}>↑</button>
-                  <button style={mini} disabled={i === s.seatOrder.length - 1} onClick={() => moveSeat(i, 1)}>↓</button>
+                  {s.bots[p]
+                    ? <button style={mini} onClick={() => roomRef.current?.send('remove_bot', { seat: p })}>移除</button>
+                    : <>
+                        <button style={mini} disabled={i === 0} onClick={() => moveSeat(i, -1)}>↑</button>
+                        <button style={mini} disabled={i === s.seatOrder.length - 1} onClick={() => moveSeat(i, 1)}>↓</button>
+                      </>}
                 </div>
               ))}
-              <div style={{ marginTop: 10 }}>
-                已入座 {s.seatOrder.length} 人(需 6–8 人)。
+              <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span>已入座 {s.seatOrder.length} 人(需 6–8 人,至少 1 位真人)。</span>
+                <button style={mini} disabled={s.seatOrder.length >= s.playerCount} onClick={() => roomRef.current?.send('add_bot')}>+ 加入 AI 玩家</button>
                 <button style={btn} onClick={() => roomRef.current?.send('start')}>開始遊戲</button>
               </div>
             </>
@@ -391,8 +403,9 @@ export default function App() {
               <b>座位順序</b>
               <div style={{ color: '#777', fontSize: 13, margin: '4px 0 8px' }}>房主正在排定座位；行動與發言將依此順序進行：</div>
               {s.seatOrder.map((p, i) => (
-                <div key={p} style={{ padding: '3px 0', opacity: s.connected[p] === false ? 0.45 : 1, fontWeight: p === mySeat ? 700 : 400 }}>
-                  {i + 1}. {p === s.hostSeat ? '👑 ' : ''}{nameOf(p)}{p === mySeat ? '(自己)' : ''}
+                <div key={p} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0', opacity: s.connected[p] === false ? 0.45 : 1, fontWeight: p === mySeat ? 700 : 400 }}>
+                  <span style={{ color: '#999' }}>{i + 1}.</span><Avatar seat={p} s={s} size={24} />
+                  <span>{p === s.hostSeat ? '👑 ' : ''}{nameOf(p)}{p === mySeat ? '(自己)' : ''}</span>
                 </div>
               ))}
               <div style={{ marginTop: 8, color: '#888' }}>已入座 {s.seatOrder.length} 人，等待房主開始…</div>
@@ -476,6 +489,8 @@ export default function App() {
         <summary style={{ cursor: 'pointer', color: '#888' }}>我的紀錄</summary>
         {privLog.map((l, i) => <div key={i} style={{ fontSize: 13 }}>{l}</div>)}
       </details>
+
+      {s.phase !== 'LOBBY' && <ChatPanel s={s} mySeat={mySeat} nameOf={nameOf} onSend={sendChat} />}
     </Shell>
   );
 }
@@ -704,8 +719,70 @@ function HelpModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-// 取「最近這一批」私訊紀錄:從尾端往前,收集與最後一筆同一輪(同「第N輪」前綴)的連續紀錄。
-// 許願一回合鑑定兩個會有兩筆,需一起顯示;沒有輪次前綴(如身份)則只取最後一筆。
+// v2:座位頭像(AI 有圖,真人顯示名字首字圓形)
+function Avatar({ seat, s, size }: { seat: string; s: Snap; size: number }) {
+  const url = s.avatars[seat];
+  const nm = s.names[seat] || seat;
+  if (url) return <img src={url} alt={nm} style={{ width: size, height: size, borderRadius: '50%', objectFit: 'cover', flex: '0 0 auto' }} />;
+  const ch = (nm.match(/[A-Za-z0-9\u4e00-\u9fff]/)?.[0] || '?').toUpperCase();
+  return (
+    <span style={{ width: size, height: size, borderRadius: '50%', background: '#c9d4e6', color: '#33415e',
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: size * 0.5, fontWeight: 700, flex: '0 0 auto' }}>
+      {ch}
+    </span>
+  );
+}
+
+// v2:通訊軟體式聊天/發言面板。AI 與真人發言累積到結束;真人只能在「輪到自己發言」時輸入。
+function ChatPanel({ s, mySeat, onSend }: { s: Snap; mySeat: string; nameOf: (id: string) => string; onSend: (t: string) => void }) {
+  const [text, setText] = useState('');
+  const endRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [s.chat.length]);
+  const myTurn = s.phase === 'SPEECH' && s.speechOrder[s.speechPointer] === mySeat;
+  const submit = () => { const t = text.trim(); if (!t) return; onSend(t); setText(''); };
+  return (
+    <div style={{ ...box, display: 'flex', flexDirection: 'column' }}>
+      <b style={{ marginBottom: 6 }}>💬 對話</b>
+      <div style={{ maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, paddingRight: 4 }}>
+        {s.chat.length === 0 && <div style={{ color: '#999', fontSize: 13 }}>進入發言階段後,玩家與 AI 的發言會出現在這裡。</div>}
+        {s.chat.map((m, i) => {
+          const mine = m.seat === mySeat;
+          return (
+            <div key={i} style={{ display: 'flex', flexDirection: mine ? 'row-reverse' : 'row', gap: 8, alignItems: 'flex-end' }}>
+              <Avatar seat={m.seat} s={s} size={30} />
+              <div style={{ maxWidth: '74%' }}>
+                <div style={{ fontSize: 11, color: '#999', textAlign: mine ? 'right' : 'left', marginBottom: 2 }}>
+                  {m.name}{m.isBot ? ' 🤖' : ''} · 第{m.round + 1}輪{m.kind === 'speech' ? '・發言' : ''}
+                </div>
+                <div style={{
+                  background: mine ? '#2d6cdf' : (m.isBot ? '#eef1f6' : '#fff'),
+                  color: mine ? '#fff' : '#222',
+                  border: mine ? 'none' : '1px solid #e3e3df',
+                  borderRadius: 12, padding: '7px 11px', fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                }}>{m.text}</div>
+              </div>
+            </div>
+          );
+        })}
+        <div ref={endRef} />
+      </div>
+      <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+          disabled={!myTurn}
+          placeholder={myTurn ? '輪到你發言,輸入訊息…' : '只有輪到你發言時才能輸入'}
+          maxLength={120}
+          style={{ flex: 1, padding: '8px 10px', borderRadius: 8, border: '1px solid #ccc', fontSize: 14, background: myTurn ? '#fff' : '#f1f1f1' }}
+        />
+        <button style={{ ...btn, opacity: myTurn ? 1 : 0.5 }} disabled={!myTurn} onClick={submit}>送出</button>
+      </div>
+      {myTurn && <div style={{ color: '#888', fontSize: 12, marginTop: 4 }}>可輸入多句與 AI 互動;講完後按「發言完畢」換下一位。</div>}
+    </div>
+  );
+}
+
 function latestBatch(log: string[]): string[] {
   if (log.length === 0) return [];
   const pref = (l: string) => l.match(/^第\d+輪/)?.[0] ?? null;
