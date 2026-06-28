@@ -3,7 +3,7 @@ import { GudongState, ProtectedEntrySchema, ChatMsgSchema } from './schema';
 import { setupGame, applyAction, turnStatusFor, camp } from '../engine/engine';
 import { Action, Effect, GameState, PlayerId, RoleId, Camp } from '../engine/types';
 import { PERSONAS, Persona, aiDisplayName, isReservedName } from './personas';
-import { BotView, botCandidates, generateSpeech } from './bot';
+import { BotView, botCandidates, generateSpeech, generateRebuttal, decideVote } from './bot';
 
 interface JoinOptions { name?: string; password?: string; playerCount?: number; slot?: number; }
 
@@ -113,6 +113,7 @@ export class GudongRoom extends Room<GudongState> {
       const myTurn = this.engine.public.phase === 'SPEECH' && sp && sp.order[sp.pointer] === seat;
       if (!myTurn) return this.sendError(client, '現在還沒輪到你發言');
       this.pushChat(seat, text, 'speech');
+      void this.botRebut(seat, text); // 即時回嘴:挑一個 AI 針對真人這句話回應(聊天泡泡)
       const res = applyAction(this.engine, { type: 'SPEECH_DONE', player: seat }); // 一句即完成發言,換下一位
       if (res.ok) { this.engine = res.state; this.routeEffects(res.effects); this.sync(); void this.driveBots(); }
     });
@@ -318,6 +319,15 @@ export class GudongRoom extends Room<GudongState> {
       if (res.ok) { this.engine = res.state; this.routeEffects(res.effects); }
       return;
     }
+    // 投票階段:有金鑰用 Gemini 決定,否則啟發式決策樹
+    if (p.phase === 'VOTE') {
+      let allocation: Record<number, number> = {};
+      try { allocation = await decideVote(this.buildBotView(seat)); } catch { allocation = {}; }
+      if (!this.engine) return;
+      const res = applyAction(this.engine, { type: 'SUBMIT_VOTE', player: seat, allocation });
+      if (res.ok) { this.engine = res.state; this.routeEffects(res.effects); return; }
+      // 萬一被拒(理論上不會),退回啟發式候選
+    }
     // 其餘:依序嘗試候選動作,第一個合法的就採用
     const cands = botCandidates(this.buildBotView(seat));
     for (const a of cands) {
@@ -326,9 +336,28 @@ export class GudongRoom extends Room<GudongState> {
     }
   }
 
+  // 即時回嘴:真人在發言回合說話後,挑一個 AI 針對他的話回應一句(聊天訊息,不影響發言輪替)
+  private async botRebut(humanSeat: PlayerId, humanText: string) {
+    if (!this.engine || this.closing) return;
+    const bots = [...this.botSeats];
+    if (bots.length === 0) return;
+    const speaker = bots[Math.floor(Math.random() * bots.length)];
+    const replyName = this.state.names.get(humanSeat) ?? humanSeat;
+    await delay(600 + Math.floor(Math.random() * 700));
+    if (!this.engine || this.closing) return;
+    let text = '';
+    try { text = await generateRebuttal(this.buildBotView(speaker), { name: replyName, text: humanText }); } catch { return; }
+    if (!text || !this.engine || this.closing) return;
+    this.pushChat(speaker, text, 'chat');
+    this.sync();
+  }
+
   private buildBotView(seat: PlayerId): BotView {
     const eng = this.engine!;
     const role = eng.secret.roles[seat] as RoleId;
+    // 老朝奉↔藥不然 互知:從私訊 TEAMMATE 取隊友座位
+    let teammateSeat: PlayerId | null = null;
+    for (const e of this.privateLog[seat] ?? []) if ((e as any).kind === 'TEAMMATE') teammateSeat = (e as any).playerId;
     return {
       seat,
       role,
@@ -338,6 +367,8 @@ export class GudongRoom extends Room<GudongState> {
       chips: eng.public.chips[seat] ?? 0,
       nameOf: (id) => this.state.names.get(id) ?? id,
       displayName: this.state.names.get(seat) ?? seat,
+      personaVoice: this.botPersona[seat]?.voice ?? '',
+      teammateSeat,
       chat: this.state.chat.map((m) => ({ name: m.name, text: m.text, round: m.round })),
     };
   }

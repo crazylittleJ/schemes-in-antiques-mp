@@ -11,7 +11,7 @@ const app = express();
 // 健康檢查(Render 用)
 app.get('/healthz', (_req, res) => res.send('ok'));
 
-// 房間 1/2/3 占用狀態(登入畫面用)
+// 房間 1~5 占用狀態(登入畫面用)
 app.get('/rooms', async (_req, res) => {
   try {
     const list = await matchMaker.query({ name: 'gudong' });

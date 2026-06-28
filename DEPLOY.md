@@ -67,6 +67,25 @@ Render 會自動重新建置並部署(見步驟 3)。
 
 ---
 
+## 步驟 2.5 — 設定 Gemini API 金鑰(讓 AI 玩家用 Gemini 發言/投票)
+
+AI bot 不需要金鑰也能玩(會用內建的 persona 啟發式發言與決策樹投票)。
+**有設定 `GEMINI_API_KEY` 時**,AI 的發言與投票會改由 Google Gemini 生成(更生動、會回嘴);呼叫失敗或逾時會自動退回啟發式,不會卡關。
+
+本 repo 的 `render.yaml` 使用 `fromGroup: GuDong` 這個**環境變數群組**,設定方式:
+
+1. Render 左側 **Env Groups → New Environment Group**,名稱輸入 `GuDong`。
+2. 在群組裡新增變數:
+   - Key:`GEMINI_API_KEY`,Value:你的 Google Gemini API 金鑰([Google AI Studio](https://aistudio.google.com/apikey) 可免費取得)。
+   - (選用)`GEMINI_MODEL`,預設 `gemini-2.5-flash-lite`;想換模型再填。
+3. 儲存後,Blueprint 部署時會自動把這個群組掛到 service 上(因為 `render.yaml` 寫了 `fromGroup: GuDong`)。已部署的話按一次 **Manual Deploy / Clear cache & deploy** 生效。
+
+> 金鑰**不要**寫進程式或推上 Git。本機開發可改放專案根目錄的 `config.json`(已 gitignore;範本見 `config.example.json`),或設環境變數 `GEMINI_API_KEY`。
+
+**用量**:免費層 Gemini(flash-lite)每分鐘/每日有額度上限。一局 6–8 人、3 輪,AI 發言+回嘴+投票大約數十次呼叫,屬於很小的用量;若同時開很多房或頻繁遊玩才需要留意額度,屆時呼叫失敗也只是自動退回啟發式,遊戲仍可進行。
+
+---
+
 ## 步驟 3 — 部署後
 
 - 打開 `onrender.com` 網址就是遊戲大廳。
@@ -89,7 +108,7 @@ Render 會自動重新建置並部署(見步驟 3)。
 
 ```bash
 npm install
-npm run test        # 引擎測試(應 130 passed)
+npm run test        # 測試:引擎 172 + bot 全自動整局 2551,全綠
 npm run dev:server  # 伺服器 :2567
 npm run dev:client  # 前端 :5173(自動連 ws://localhost:2567)
 ```

@@ -26,7 +26,9 @@ function run(seedSeats: number, seed: number) {
     const role = state.secret.roles[seat] as RoleId;
     return {
       seat, role, camp: camp(role) as Camp, pub: state.public, myLog: log[seat],
-      chips: state.public.chips[seat] ?? 0, nameOf: (id) => id, displayName: `${seat}(AI)`, chat,
+      chips: state.public.chips[seat] ?? 0, nameOf: (id) => id, displayName: `${seat}(AI)`,
+      personaVoice: '測試用語氣', teammateSeat: (() => { for (const e of log[seat]) if ((e as any).kind === 'TEAMMATE') return (e as any).playerId; return null; })(),
+      chat,
     };
   };
 
@@ -57,6 +59,12 @@ function run(seedSeats: number, seed: number) {
       state = res.state; collect(res.effects); continue;
     }
     const cands = botCandidates(view(actor));
+    // #1 老朝奉↔藥不然 互知,絕不互指
+    if (p.phase === 'IDENTITY_REVEAL' && (state.secret.roles[actor] === '老朝奉' || state.secret.roles[actor] === '藥不然')) {
+      const mate = Object.keys(state.secret.roles).find((s) => state.secret.roles[s] === (state.secret.roles[actor] === '老朝奉' ? '藥不然' : '老朝奉'));
+      const g = cands.find((a) => a.type === 'GUESS_XU' || a.type === 'GUESS_FANG') as any;
+      if (g) assert(g.targetId !== mate, `${state.secret.roles[actor]} 不應指認隊友 ${mate}`);
+    }
     let done = false;
     for (const a of cands) {
       const res = applyAction(state, a);

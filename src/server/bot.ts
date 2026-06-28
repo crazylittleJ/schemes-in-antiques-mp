@@ -5,8 +5,8 @@
 import { Action, AnimalId, Camp, Effect, PlayerId, PublicState, RoleId, ANIMALS } from '../engine/types';
 import { camp } from '../engine/engine';
 import { ROLE_STYLE } from './personas';
-import { buildSpeechPrompts } from './prompt';
-import { geminiSpeech } from './gemini';
+import { buildSpeechPrompts, buildVotePrompts } from './prompt';
+import { geminiSpeech, geminiJSON } from './gemini';
 
 export interface BotView {
   seat: PlayerId;
@@ -17,6 +17,8 @@ export interface BotView {
   chips: number;
   nameOf: (id: PlayerId) => string;
   displayName: string;             // 例:Leo(AI)
+  personaVoice: string;            // 此 AI 的說話語氣/性格
+  teammateSeat: PlayerId | null;   // 老朝奉↔藥不然 互知的隊友座位(其他角色為 null)
   chat: { name: string; text: string; round: number }[];
 }
 
@@ -59,7 +61,9 @@ export function botCandidates(v: BotView): Action[] {
       if (v.role === '老朝奉') {
         out.push({ type: 'USE_ABILITY', player: seat }); // 顛倒黑白
       } else if (v.role === '藥不然') {
-        const tgt = remaining[0] ?? p.seatOrder.find((x) => x !== seat);
+        // 通常不偷襲已知隊友(老朝奉);優先襲擊還沒行動的非隊友
+        const tgt = remaining.find((x) => x !== v.teammateSeat)
+          ?? p.seatOrder.find((x) => x !== seat && x !== v.teammateSeat);
         if (tgt) out.push({ type: 'USE_ABILITY', player: seat, targetId: tgt });
       } else if (v.role === '鄭國渠') {
         if (ra.length) out.push({ type: 'USE_ABILITY', player: seat, animalId: ra[0] });
@@ -73,7 +77,7 @@ export function botCandidates(v: BotView): Action[] {
   } else if (p.phase === 'REVEAL') {
     out.push({ type: 'CONTINUE', player: seat });
   } else if (p.phase === 'IDENTITY_REVEAL') {
-    const other = p.seatOrder.find((x) => x !== seat)!;
+    const other = p.seatOrder.find((x) => x !== seat && x !== v.teammateSeat)!;
     if (v.role === '老朝奉') out.push({ type: 'GUESS_XU', player: seat, targetId: guessTarget(v) ?? other });
     else if (v.role === '藥不然') out.push({ type: 'GUESS_FANG', player: seat, targetId: guessTarget(v) ?? other });
     else if (v.camp === 'GOOD') out.push({ type: 'GUESS_LAO', player: seat, targetId: guessTarget(v) ?? other });
@@ -95,11 +99,11 @@ function allocateVotes(v: BotView): Record<AnimalId, number> {
   return alloc;
 }
 
-// 身份猜測(啟發式):好人猜一個「自己沒驗成好人」的對象;否則隨機非自己。
+// 身份猜測(啟發式):排除已知隊友(老朝奉↔藥不然 互知,絕不互指);好人優先猜「沒驗成好人」的對象。
 function guessTarget(v: BotView): PlayerId | null {
   const { factions } = myResultsThisRound(v);
   const knownGood = new Set(factions.filter((f) => f.camp === 'GOOD').map((f) => f.id));
-  const cand = v.pub.seatOrder.filter((x) => x !== v.seat && !knownGood.has(x));
+  const cand = v.pub.seatOrder.filter((x) => x !== v.seat && x !== v.teammateSeat && !knownGood.has(x));
   return cand[0] ?? null;
 }
 
@@ -125,6 +129,7 @@ export async function generateSpeech(v: BotView): Promise<{ text: string; though
     displayName: v.displayName,
     role: v.role,
     camp: v.camp,
+    personaVoice: v.personaVoice,
     roundIndex: v.pub.roundIndex,
     roundAnimals: v.pub.roundAnimals,
     myIntel: intel,
@@ -135,14 +140,68 @@ export async function generateSpeech(v: BotView): Promise<{ text: string; though
   return { text: heuristicSpeech(v, intel) };
 }
 
+// 即時回嘴:針對某人剛說的話回應一句(有金鑰用 Gemini,否則用簡短啟發式)
+export async function generateRebuttal(v: BotView, replyTo: { name: string; text: string }): Promise<string> {
+  const { system, user } = buildSpeechPrompts({
+    displayName: v.displayName, role: v.role, camp: v.camp, personaVoice: v.personaVoice,
+    roundIndex: v.pub.roundIndex, roundAnimals: v.pub.roundAnimals,
+    myIntel: intelSentence(v), chatHistory: recentChat(v), replyTo,
+  });
+  const g = await geminiSpeech(system, user);
+  if (g && g.result) return g.result.replace(/\s+/g, ' ').trim().slice(0, 150);
+  // 啟發式回嘴:用人設口吻接一句
+  const quips = v.camp === 'GOOD'
+    ? [`${replyTo.name},你這說法有依據嗎?說來聽聽。`, `我倒覺得未必,別急著下定論。`, `這話我不太認同,證據呢?`]
+    : [`${replyTo.name},你少帶風向了,沒那麼簡單。`, `哼,說得這麼篤定,我看你才可疑。`, `別一張嘴就帶節奏,大家自己看。`];
+  return quips[Math.floor((v.pub.roundIndex + v.seat.length + replyTo.text.length) % quips.length)];
+}
+
+// 投票決策:有金鑰用 Gemini 決定保護哪些獸首,否則用啟發式決策樹(allocateVotes)
+export async function decideVote(v: BotView): Promise<Record<AnimalId, number>> {
+  const { system, user } = buildVotePrompts({
+    displayName: v.displayName, role: v.role, camp: v.camp, personaVoice: v.personaVoice,
+    roundIndex: v.pub.roundIndex, roundAnimals: v.pub.roundAnimals,
+    myIntel: intelSentence(v), chips: v.chips, chatHistory: recentChat(v),
+  });
+  const schema = {
+    type: 'OBJECT',
+    properties: { protect: { type: 'ARRAY', items: { type: 'STRING' } }, thought: { type: 'STRING' } },
+    required: ['protect'],
+  };
+  const out = await geminiJSON(system, user, schema);
+  if (out && Array.isArray(out.protect)) {
+    // 把中文獸首名對回 id,且僅限本輪桌上的獸首,最多 2 個
+    const wanted = out.protect
+      .map((nm: string) => ANIMALS.findIndex((a) => a === String(nm).trim()))
+      .filter((id: number) => id >= 0 && v.pub.roundAnimals.includes(id))
+      .slice(0, 2) as AnimalId[];
+    const picks = Array.from(new Set(wanted));
+    if (picks.length) return spread(picks, v.chips);
+  }
+  return allocateVotes(v); // 退回啟發式決策樹
+}
+
+// 把籌碼平均分到 picks 上(總和 ≤ chips)
+function spread(picks: AnimalId[], chips: number): Record<AnimalId, number> {
+  const alloc: Record<AnimalId, number> = {};
+  let left = chips;
+  if (left <= 0 || picks.length === 0) return alloc;
+  const per = Math.floor(left / picks.length);
+  for (const a of picks) { alloc[a] = per; left -= per; }
+  for (let i = 0; left > 0 && i < picks.length; i++) { alloc[picks[i]] += 1; left -= 1; }
+  return alloc;
+}
+
 // 無金鑰時的 persona 啟發式發言:用角色語氣 + 本輪情報拼一句,不暴露身份。
 function heuristicSpeech(v: BotView, intel: string): string {
   const st = ROLE_STYLE[v.role];
   const { real, fake } = myResultsThisRound(v);
   const A = (a: AnimalId) => ANIMALS[a];
   if (real.length || fake.length) {
-    const claimReal = v.camp === 'GOOD' ? real : fake; // 壞人對外把假的講成「該保的」
-    const claimFake = v.camp === 'GOOD' ? fake : real;
+    // 壞人「看情況」:部分回合說真話建立信任,部分回合才顛倒(以 round+seat 決定,避免每輪都反)
+    const lie = v.camp === 'BAD' && ((v.pub.roundIndex + v.seat.length) % 2 === 0);
+    const claimReal = lie ? fake : real;
+    const claimFake = lie ? real : fake;
     const segs: string[] = [];
     if (claimReal.length) segs.push(`我看「${claimReal.map(A).join('、')}」這幾件對,該保下來`);
     if (claimFake.length) segs.push(`「${claimFake.map(A).join('、')}」氣息不對,別浪費籌碼`);

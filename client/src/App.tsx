@@ -230,6 +230,8 @@ export default function App() {
   if (!roomRef.current || !snap) {
     return (
       <Shell>
+        <div aria-hidden style={{ position: 'fixed', inset: 0, zIndex: -2, backgroundImage: 'url(/bg.jpg)', backgroundSize: 'cover', backgroundPosition: 'center', opacity: 0.6 }} />
+        <div aria-hidden style={{ position: 'fixed', inset: 0, zIndex: -1, background: 'rgba(255,255,255,0.4)' }} />
         {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
         <h1>古董局中局</h1>
         <div style={{ background: '#fff3d6', border: '1px solid #e6c14d', color: '#7a5b00', borderRadius: 8, padding: '10px 12px', margin: '8px 0', fontSize: 14 }}>
@@ -239,9 +241,9 @@ export default function App() {
         <Field label="暱稱"><input value={name} onChange={(e) => setName(e.target.value)} placeholder="不可空白或含空格" /></Field>
         <Field label="房間密碼"><input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="不可空白或含空格" /></Field>
 
-        <Field label="房間(最多 3 間)">
-          <div style={{ display: 'flex', gap: 8 }}>
-            {[1, 2, 3].map((n) => {
+        <Field label="房間(最多 5 間)">
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {[1, 2, 3, 4, 5].map((n) => {
               const r = rooms.find((x) => x.slot === n);
               const occupied = !!r;
               const started = r?.started;
@@ -252,7 +254,7 @@ export default function App() {
               const statusColor = !occupied ? '#999' : ended ? '#a11' : started ? '#a11' : '#2a7';
               return (
                 <button key={n} onClick={() => setSlot(n)} style={{
-                  flex: 1, padding: '8px 6px', borderRadius: 8, cursor: 'pointer', fontSize: 13,
+                  flex: '1 1 28%', minWidth: 92, padding: '8px 6px', borderRadius: 8, cursor: 'pointer', fontSize: 13,
                   border: slot === n ? '2px solid #2d6cdf' : '1px solid #ccc',
                   background: slot === n ? '#eaf1ff' : '#fafafa',
                 }}>
@@ -343,19 +345,29 @@ export default function App() {
         <div style={box}>
           <b>遊戲紀錄</b>
           {s.phase === 'TURN' && (
-            <div style={{ marginTop: 4 }}>本輪行動順序：{
-              [...s.actedPlayers, ...(s.currentPlayer ? [s.currentPlayer] : [])].map((p, i, arr) => (
-                <span key={p} style={{ fontWeight: p === s.currentPlayer ? 700 : 400 }}>
-                  {nameOf(p)}{p === mySeat ? '(自己)' : ''}{p === s.currentPlayer ? '(進行中)' : ''}{i < arr.length - 1 ? ' → ' : ''}
-                </span>
-              ))
-            }{s.actedPlayers.length === 0 && <span style={{ color: '#999' }}>尚未開始</span>}</div>
+            <div style={{ marginTop: 4 }}>
+              <div style={{ marginBottom: 2 }}>本輪行動順序:</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 2px' }}>
+                {[...s.actedPlayers, ...(s.currentPlayer ? [s.currentPlayer] : [])].map((p, i, arr) => (
+                  <span key={p} style={{ display: 'inline-flex', alignItems: 'center', maxWidth: '100%' }}>
+                    <span style={{
+                      padding: '1px 7px', borderRadius: 10, fontSize: 13, wordBreak: 'break-word',
+                      background: p === s.currentPlayer ? '#2d6cdf' : '#eef0f3',
+                      color: p === s.currentPlayer ? '#fff' : '#333',
+                      fontWeight: p === s.currentPlayer ? 700 : 400,
+                    }}>{nameOf(p)}{p === mySeat ? '(自己)' : ''}{p === s.currentPlayer ? ' ·進行中' : ''}</span>
+                    {i < arr.length - 1 && <span style={{ color: '#bbb', margin: '0 2px' }}>→</span>}
+                  </span>
+                ))}
+                {s.actedPlayers.length === 0 && <span style={{ color: '#999' }}>尚未開始</span>}
+              </div>
+            </div>
           )}
           {s.turnOrders.map((ord, i) => {
             const vr = s.voteRounds[i];
             return (
               <div key={i} style={{ marginTop: 6, borderTop: '1px solid #eee', paddingTop: 6 }}>
-                <div style={{ fontSize: 13, color: '#555' }}>第 {i + 1} 輪 行動：{ord.map((p) => `${nameOf(p)}${p === mySeat ? '(自己)' : ''}`).join(' → ')}</div>
+                <div style={{ fontSize: 13, color: '#555', overflowWrap: 'anywhere', wordBreak: 'break-word', lineHeight: 1.7 }}>第 {i + 1} 輪 行動：{ord.map((p) => `${nameOf(p)}${p === mySeat ? '(自己)' : ''}`).join(' → ')}</div>
                 {vr && vr.top.map((a: number) => {
                   const real = a in s.revealedReal ? (s.revealedReal[a] ? '(真)' : '(假)') : '';
                   const total = vr.tally[a] || 0;
@@ -435,9 +447,9 @@ export default function App() {
 
       {s.phase === 'SPEECH' && (
         <div style={box}>
-          發言順序：{s.speechOrder.map((p, i) => (
+          <div style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', lineHeight: 1.8 }}>發言順序：{s.speechOrder.map((p, i) => (
             <span key={p} style={{ marginRight: 6, fontWeight: i === s.speechPointer ? 700 : 400 }}>{nameOf(p)}</span>
-          ))}
+          ))}</div>
           {s.speechOrder[s.speechPointer] === mySeat &&
             <div><button style={btn} onClick={() => send({ type: 'SPEECH_DONE' })}>發言完畢</button></div>}
         </div>
