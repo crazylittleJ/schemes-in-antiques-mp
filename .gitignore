@@ -1,0 +1,7 @@
+node_modules/
+dist/
+client/dist/
+*.log
+
+# Local AI API key configuration (excluded from version control).
+config.json
