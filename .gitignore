@@ -1,0 +1,7 @@
+node_modules/
+dist/
+client/dist/
+*.log
+
+# 本機 AI 金鑰設定,不進版控
+config.json
