@@ -205,18 +205,17 @@ function spread(picks: AnimalId[], chips: number): Record<AnimalId, number> {
 
 // 無金鑰時的 persona 啟發式發言:用角色語氣 + 本輪情報拼一句,不暴露身份。
 function heuristicSpeech(v: BotView, intel: string, replyTo?: { name: string; text: string } | null): string {
-  const st = ROLE_STYLE[v.role];
   const { real, fake } = myResultsThisRound(v);
   const A = (a: AnimalId) => ANIMALS[a];
   const prefix = replyTo ? `${replyTo.name},` : '';
-  // 方震/許願:啟發式也用角色範例口吻(避免用 speechIntel 的私下提示直接當發言)
+  // 方震/許願:啟發式也用角色口吻,但沒把握時改走 noInfoLine(優先點名、少數才模糊)
   if (v.role === '方震' || v.role === '許願') {
     const one = real[0] ?? fake[0];
     if (one !== undefined) {
       const isReal = real.includes(one);
       return `${prefix}我看「${A(one)}」這件${isReal ? '對,該保下來' : '氣息不對,別浪費籌碼'}。${tail(v)}`;
     }
-    return prefix + st.example;
+    return noInfoLine(v, prefix);
   }
   if (real.length || fake.length) {
     // 壞人「誤導優先」:預設顛倒真假(中間輪偶爾說真話洗白);好人照實。
@@ -228,8 +227,22 @@ function heuristicSpeech(v: BotView, intel: string, replyTo?: { name: string; te
     if (claimFake.length) segs.push(`「${claimFake.map(A).join('、')}」氣息不對,別浪費籌碼`);
     return prefix + segs.join(',') + '。' + tail(v);
   }
-  // 沒情報:用角色口吻帶風向
-  return prefix + st.example;
+  // 沒情報:優先「猜一個獸首」點名帶風向,少數情況才講得模糊
+  return noInfoLine(v, prefix);
+}
+
+// 沒把握時:約 85% 仍點一個獸首來講(用猜的、語氣保守),約 15% 才講得模糊不點名。
+function noInfoLine(v: BotView, prefix: string): string {
+  const pick = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
+  const ra = v.pub.roundAnimals;
+  if (ra.length === 0 || Math.random() < 0.15) {
+    return prefix + pick(['我還看不太準,再觀察觀察。', '這輪我沒什麼把握,先聽大家的。', '目前我持保留態度,不好說。']);
+  }
+  const a = ANIMALS[pick(ra)];
+  const opts = v.camp === 'GOOD'
+    ? [`我猜「${a}」這件比較可疑,大家多留意。`, `「${a}」我看著有點不對,不太敢保。`, `要我說,「${a}」得盯緊一點。`]
+    : [`「${a}」我覺得沒問題,可以保下來。`, `依我看「${a}」是對的,別漏了牠。`, `「${a}」這件我傾向留著。`];
+  return prefix + pick(opts);
 }
 
 function tail(v: BotView): string {
