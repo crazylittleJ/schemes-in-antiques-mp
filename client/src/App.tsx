@@ -368,12 +368,19 @@ export default function App() {
             return (
               <div key={i} style={{ marginTop: 6, borderTop: '1px solid #eee', paddingTop: 6 }}>
                 <div style={{ fontSize: 13, color: '#555', overflowWrap: 'anywhere', wordBreak: 'break-word', lineHeight: 1.7 }}>第 {i + 1} 輪 行動：{ord.map((p) => `${nameOf(p)}${p === mySeat ? '(自己)' : ''}`).join(' → ')}</div>
-                {vr && vr.top.map((a: number) => {
-                  const real = a in s.revealedReal ? (s.revealedReal[a] ? '(真)' : '(假)') : '';
-                  const total = vr.tally[a] || 0;
-                  const voters = vr.breakdown.filter((b: any) => (b.alloc[a] || 0) > 0).map((b: any) => `${nameOf(b.seat)} x${b.alloc[a]}`);
-                  return <div key={a} style={{ color: '#2563eb', fontSize: 13 }}>{ANIMALS[a]}{real} {total}票 — {voters.join('、') || '無人投'}</div>;
-                })}
+                {vr && [...vr.animals]
+                  .sort((x: number, y: number) => (vr.tally[y] || 0) - (vr.tally[x] || 0) || vr.animals.indexOf(x) - vr.animals.indexOf(y))
+                  .map((a: number) => {
+                    const isTop = vr.top.includes(a);
+                    const real = a in s.revealedReal ? (s.revealedReal[a] ? '(真)' : '(假)') : '';
+                    const total = vr.tally[a] || 0;
+                    const voters = vr.breakdown.filter((b: any) => (b.alloc[a] || 0) > 0).map((b: any) => `${nameOf(b.seat)} x${b.alloc[a]}`);
+                    return (
+                      <div key={a} style={{ color: isTop ? '#2563eb' : '#8a8a8a', fontSize: 13 }}>
+                        {isTop ? '🛡 ' : '　'}{ANIMALS[a]}{real} {total}票 — {voters.join('、') || '無人投'}
+                      </div>
+                    );
+                  })}
               </div>
             );
           })}
