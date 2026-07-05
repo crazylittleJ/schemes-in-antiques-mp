@@ -3,7 +3,7 @@ import { GudongState, ProtectedEntrySchema, ChatMsgSchema } from './schema';
 import { setupGame, applyAction, turnStatusFor, camp } from '../engine/engine';
 import { Action, Effect, GameState, PlayerId, RoleId, Camp } from '../engine/types';
 import { PERSONAS, Persona, aiDisplayName, isReservedName } from './personas';
-import { BotView, botCandidates, generateSpeech, generateRebuttal, decideVote } from './bot';
+import { BotView, botCandidates, generateSpeech, decideVote } from './bot';
 
 interface JoinOptions { name?: string; password?: string; playerCount?: number; slot?: number; }
 
@@ -31,6 +31,8 @@ export class GudongRoom extends Room<GudongState> {
   private botPersona: Record<PlayerId, Persona> = {}; // bot 座位 -> 人設
   private usedPersonaIds = new Set<string>(); // 已被佔用的人設 id(避免重複)
   private botBusy = false;                   // driveBots 重入防護
+  // 真人剛發的話,供「下一個輪到的 AI」在自己回合回應(遵守發言順序,用完即清)
+  private lastHumanChat: { name: string; text: string; round: number } | null = null;
   private botRerun = false;                  // driveBots 進行中又被觸發 → 收尾後再跑一輪
 
   onCreate(options: JoinOptions) {
@@ -51,6 +53,8 @@ export class GudongRoom extends Room<GudongState> {
       client.send('seat', { seatId: seat, isHost: seat === this.hostSeat });
       for (const e of this.privateLog[seat] ?? []) client.send('effect', e);
       this.sendTurnStatus(client, seat);
+      // 重整後可靠補送「本人剩餘票數」(含上一輪保留下來的),避免顯示成 0
+      if (this.engine) client.send('mychips', this.engine.public.chips[seat] ?? 0);
       this.sync();
     });
     this.onMessage('action', (client, payload: Omit<Action, 'player'>) => {
@@ -113,7 +117,8 @@ export class GudongRoom extends Room<GudongState> {
       const myTurn = this.engine.public.phase === 'SPEECH' && sp && sp.order[sp.pointer] === seat;
       if (!myTurn) return this.sendError(client, '現在還沒輪到你發言');
       this.pushChat(seat, text, 'speech');
-      void this.botRebut(seat, text); // 即時回嘴:挑一個 AI 針對真人這句話回應(聊天泡泡)
+      // 不即時插話(會破壞發言順序);記下這句,讓「接下來輪到的 AI」在自己回合順順回應。
+      this.lastHumanChat = { name: this.state.names.get(seat) ?? seat, text, round: this.engine.public.roundIndex };
       const res = applyAction(this.engine, { type: 'SPEECH_DONE', player: seat }); // 一句即完成發言,換下一位
       if (res.ok) { this.engine = res.state; this.routeEffects(res.effects); this.sync(); void this.driveBots(); }
     });
@@ -308,11 +313,16 @@ export class GudongRoom extends Room<GudongState> {
     const p = this.engine.public;
     // 發言階段:先生成發言、貼到聊天,再送 SPEECH_DONE
     if (p.phase === 'SPEECH' && p.speech && p.speech.order[p.speech.pointer] === seat) {
+      // 若這輪剛有真人發言,讓「輪到的這個 AI」在自己回合順順回應(遵守發言順序);用完即清
+      const replyTo = this.lastHumanChat && this.lastHumanChat.round === p.roundIndex
+        ? { name: this.lastHumanChat.name, text: this.lastHumanChat.text }
+        : null;
       let text = '……';
       try {
-        const out = await generateSpeech(this.buildBotView(seat));
+        const out = await generateSpeech(this.buildBotView(seat), replyTo);
         text = out.text || text;
       } catch { /* 發言失敗就用預設,不卡關 */ }
+      if (replyTo) this.lastHumanChat = null;
       if (!this.engine) return;
       this.pushChat(seat, text, 'speech');
       const res = applyAction(this.engine, { type: 'SPEECH_DONE', player: seat });
@@ -337,21 +347,6 @@ export class GudongRoom extends Room<GudongState> {
   }
 
   // 即時回嘴:真人在發言回合說話後,挑一個 AI 針對他的話回應一句(聊天訊息,不影響發言輪替)
-  private async botRebut(humanSeat: PlayerId, humanText: string) {
-    if (!this.engine || this.closing) return;
-    const bots = [...this.botSeats];
-    if (bots.length === 0) return;
-    const speaker = bots[Math.floor(Math.random() * bots.length)];
-    const replyName = this.state.names.get(humanSeat) ?? humanSeat;
-    await delay(600 + Math.floor(Math.random() * 700));
-    if (!this.engine || this.closing) return;
-    let text = '';
-    try { text = await generateRebuttal(this.buildBotView(speaker), { name: replyName, text: humanText }); } catch { return; }
-    if (!text || !this.engine || this.closing) return;
-    this.pushChat(speaker, text, 'chat');
-    this.sync();
-  }
-
   private buildBotView(seat: PlayerId): BotView {
     const eng = this.engine!;
     const role = eng.secret.roles[seat] as RoleId;

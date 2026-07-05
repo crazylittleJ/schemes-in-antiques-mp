@@ -85,18 +85,15 @@ export function botCandidates(v: BotView): Action[] {
   return out;
 }
 
-// 投票:好人把籌碼押在「自己驗到的真品」;壞人押在「自己驗到的假品」以誤導;沒情報就押第一個獸首。
+// 投票:只押「自己有把握的獸首」——好人押驗到的真品、壞人押驗到的假品(誤導)。
+// 不確定(本輪沒驗到相關結果)就「保留票數」到下一輪,不亂投。非最後一輪也會留一點餘裕。
 function allocateVotes(v: BotView): Record<AnimalId, number> {
   const { real, fake } = myResultsThisRound(v);
   const targets = (v.camp === 'GOOD' ? real : fake).filter((a) => v.pub.roundAnimals.includes(a));
-  const pick = targets.length ? targets : v.pub.roundAnimals.slice(0, 1);
-  const alloc: Record<AnimalId, number> = {};
-  let left = v.chips;
-  if (left <= 0 || pick.length === 0) return alloc;
-  const per = Math.floor(left / pick.length);
-  for (const a of pick) { alloc[a] = per; left -= per; }
-  for (let i = 0; left > 0 && i < pick.length; i++) { alloc[pick[i]] += 1; left -= 1; }
-  return alloc;
+  if (targets.length === 0 || v.chips <= 0) return {}; // 沒把握 → 保留票數(棄權),留到下一輪
+  const isLastRound = v.pub.roundIndex >= 2; // 最後一輪票不會留下 → 全押;其餘留餘裕
+  const budget = isLastRound ? v.chips : Math.min(v.chips, targets.length * 2);
+  return spread(targets, budget);
 }
 
 // 身份猜測(啟發式):排除已知隊友(老朝奉↔藥不然 互知,絕不互指);好人優先猜「沒驗成好人」的對象。
@@ -107,7 +104,8 @@ function guessTarget(v: BotView): PlayerId | null {
   return cand[0] ?? null;
 }
 
-// ── 本輪情報的自然語句(給發言用)─────────────────────────────────────────
+// ── 本輪情報的自然語句 ─────────────────────────────────────────
+// intelSentence:完整情報(給「投票推理」用,不會被別人看到)。
 export function intelSentence(v: BotView): string {
   const { real, fake, factions } = myResultsThisRound(v);
   const A = (a: AnimalId) => ANIMALS[a];
@@ -118,13 +116,37 @@ export function intelSentence(v: BotView): string {
   return parts.join(';') + (parts.length ? '。' : '');
 }
 
+// speechIntel:給「發言」用的情報,會依角色做限制,避免暴露身分。
+// - 許願:一回合會驗兩件,但發言只講「一件最有利的」,以免被看出是許願。
+// - 方震:不會鑑寶、真本事是查陣營;發言絕不透露查陣營,只給模型一個「用鑑寶口吻暗示」的私下方向。
+function speechIntel(v: BotView): string {
+  const { real, fake, factions } = myResultsThisRound(v);
+  const A = (a: AnimalId) => ANIMALS[a];
+  if (v.role === '方震') {
+    const bad = factions.filter((f) => f.camp === 'BAD').map((f) => v.nameOf(f.id));
+    const good = factions.filter((f) => f.camp === 'GOOD').map((f) => v.nameOf(f.id));
+    const hint: string[] = [];
+    if (bad.length) hint.push(`你「私下」知道 ${bad.join('、')} 不可信,但只能用「他對某件的鑑定不對」這種鑑寶口吻暗中質疑,絕不可說出你能看穿身分`);
+    if (good.length) hint.push(`你「私下」知道 ${good.join('、')} 可信,可以順著他`);
+    if (!hint.length) return '本輪你沒有明確方向,就用鑑寶行話穩住場面、觀察大家。';
+    return hint.join(';') + '。';
+  }
+  if (v.role === '許願') {
+    if (real.length) return `你確定「${A(real[0])}」是真的,主張把牠保下來(只講這一件,別把你驗到的全講出來)。`;
+    if (fake.length) return `你確定「${A(fake[0])}」是假的,提醒大家別在牠身上浪費籌碼(只講這一件)。`;
+    return '本輪你沒有明確情報。';
+  }
+  return intelSentence(v);
+}
+
 // ── 發言:有金鑰用 Gemini,否則退回 persona 啟發式 ───────────────────────
 function recentChat(v: BotView, n = 8): string {
   return v.chat.slice(-n).map((m) => `${m.name}:${m.text}`).join('\n');
 }
 
-export async function generateSpeech(v: BotView): Promise<{ text: string; thought?: string }> {
-  const intel = intelSentence(v);
+// replyTo:若這一輪輪到本 bot 前,有人(通常是真人)剛發言,可在「自己回合」順順接話回應(仍遵守發言順序)。
+export async function generateSpeech(v: BotView, replyTo?: { name: string; text: string } | null): Promise<{ text: string; thought?: string }> {
+  const intel = speechIntel(v);
   const { system, user } = buildSpeechPrompts({
     displayName: v.displayName,
     role: v.role,
@@ -134,26 +156,11 @@ export async function generateSpeech(v: BotView): Promise<{ text: string; though
     roundAnimals: v.pub.roundAnimals,
     myIntel: intel,
     chatHistory: recentChat(v),
+    replyTo: replyTo ?? null,
   });
   const g = await geminiSpeech(system, user);
   if (g && g.result) return { text: g.result.replace(/\s+/g, ' ').trim().slice(0, 150), thought: g.thought };
-  return { text: heuristicSpeech(v, intel) };
-}
-
-// 即時回嘴:針對某人剛說的話回應一句(有金鑰用 Gemini,否則用簡短啟發式)
-export async function generateRebuttal(v: BotView, replyTo: { name: string; text: string }): Promise<string> {
-  const { system, user } = buildSpeechPrompts({
-    displayName: v.displayName, role: v.role, camp: v.camp, personaVoice: v.personaVoice,
-    roundIndex: v.pub.roundIndex, roundAnimals: v.pub.roundAnimals,
-    myIntel: intelSentence(v), chatHistory: recentChat(v), replyTo,
-  });
-  const g = await geminiSpeech(system, user);
-  if (g && g.result) return g.result.replace(/\s+/g, ' ').trim().slice(0, 150);
-  // 啟發式回嘴:用人設口吻接一句
-  const quips = v.camp === 'GOOD'
-    ? [`${replyTo.name},你這說法有依據嗎?說來聽聽。`, `我倒覺得未必,別急著下定論。`, `這話我不太認同,證據呢?`]
-    : [`${replyTo.name},你少帶風向了,沒那麼簡單。`, `哼,說得這麼篤定,我看你才可疑。`, `別一張嘴就帶節奏,大家自己看。`];
-  return quips[Math.floor((v.pub.roundIndex + v.seat.length + replyTo.text.length) % quips.length)];
+  return { text: heuristicSpeech(v, intel, replyTo) };
 }
 
 // 投票決策:有金鑰用 Gemini 決定保護哪些獸首,否則用啟發式決策樹(allocateVotes)
@@ -176,7 +183,11 @@ export async function decideVote(v: BotView): Promise<Record<AnimalId, number>> 
       .filter((id: number) => id >= 0 && v.pub.roundAnimals.includes(id))
       .slice(0, 2) as AnimalId[];
     const picks = Array.from(new Set(wanted));
-    if (picks.length) return spread(picks, v.chips);
+    if (picks.length) {
+      const isLastRound = v.pub.roundIndex >= 2;
+      const budget = isLastRound ? v.chips : Math.min(v.chips, picks.length * 2);
+      return spread(picks, budget);
+    }
   }
   return allocateVotes(v); // 退回啟發式決策樹
 }
@@ -193,22 +204,32 @@ function spread(picks: AnimalId[], chips: number): Record<AnimalId, number> {
 }
 
 // 無金鑰時的 persona 啟發式發言:用角色語氣 + 本輪情報拼一句,不暴露身份。
-function heuristicSpeech(v: BotView, intel: string): string {
+function heuristicSpeech(v: BotView, intel: string, replyTo?: { name: string; text: string } | null): string {
   const st = ROLE_STYLE[v.role];
   const { real, fake } = myResultsThisRound(v);
   const A = (a: AnimalId) => ANIMALS[a];
+  const prefix = replyTo ? `${replyTo.name},` : '';
+  // 方震/許願:啟發式也用角色範例口吻(避免用 speechIntel 的私下提示直接當發言)
+  if (v.role === '方震' || v.role === '許願') {
+    const one = real[0] ?? fake[0];
+    if (one !== undefined) {
+      const isReal = real.includes(one);
+      return `${prefix}我看「${A(one)}」這件${isReal ? '對,該保下來' : '氣息不對,別浪費籌碼'}。${tail(v)}`;
+    }
+    return prefix + st.example;
+  }
   if (real.length || fake.length) {
-    // 壞人「看情況」:部分回合說真話建立信任,部分回合才顛倒(以 round+seat 決定,避免每輪都反)
-    const lie = v.camp === 'BAD' && ((v.pub.roundIndex + v.seat.length) % 2 === 0);
+    // 壞人「誤導優先」:預設顛倒真假(中間輪偶爾說真話洗白);好人照實。
+    const lie = v.camp === 'BAD' && v.pub.roundIndex !== 1;
     const claimReal = lie ? fake : real;
     const claimFake = lie ? real : fake;
     const segs: string[] = [];
     if (claimReal.length) segs.push(`我看「${claimReal.map(A).join('、')}」這幾件對,該保下來`);
     if (claimFake.length) segs.push(`「${claimFake.map(A).join('、')}」氣息不對,別浪費籌碼`);
-    return segs.join(',') + '。' + tail(v);
+    return prefix + segs.join(',') + '。' + tail(v);
   }
   // 沒情報:用角色口吻帶風向
-  return st.example;
+  return prefix + st.example;
 }
 
 function tail(v: BotView): string {
