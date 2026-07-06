@@ -18,6 +18,7 @@ export interface BotView {
   nameOf: (id: PlayerId) => string;
   displayName: string;             // 例:Leo(AI)
   personaVoice: string;            // 此 AI 的說話語氣/性格
+  personaFlavor?: { open: string; close: string }; // 離線啟發式口頭禪(開場/收尾)
   teammateSeat: PlayerId | null;   // 老朝奉↔藥不然 互知的隊友座位(其他角色為 null)
   chat: { name: string; text: string; round: number }[];
 }
@@ -224,7 +225,7 @@ function heuristicSpeech(v: BotView, replyTo?: { name: string; text: string } | 
     const one = real[0] ?? fake[0];
     if (one !== undefined) {
       const isReal = real.includes(one);
-      return `${prefix}我看「${A(one)}」這件${isReal ? '對,該保下來' : '氣息不對,別浪費籌碼'}。${tail(v)}`;
+      return flavorize(v, prefix, `我看「${A(one)}」這件${isReal ? '對,該保下來' : '氣息不對,別浪費籌碼'}。`);
     }
     return noInfoLine(v, prefix, g);
   }
@@ -236,7 +237,7 @@ function heuristicSpeech(v: BotView, replyTo?: { name: string; text: string } | 
     const segs: string[] = [];
     if (claimReal.length) segs.push(`我看「${claimReal.map(A).join('、')}」這幾件對,該保下來`);
     if (claimFake.length) segs.push(`「${claimFake.map(A).join('、')}」氣息不對,別浪費籌碼`);
-    return prefix + segs.join(',') + '。' + tail(v);
+    return flavorize(v, prefix, segs.join(',') + '。');
   }
   // 沒情報:優先「猜一個獸首」點名帶風向,少數情況才講得模糊
   return noInfoLine(v, prefix, g);
@@ -264,21 +265,23 @@ function noInfoDirective(v: BotView, animal: AnimalId | null): string {
 }
 
 // 啟發式(離線)沒情報發言:依 animal 決定點名或模糊(animal 由 decideNoInfo 事先決定)。
+// 把一句「資訊核心」套上該角色的口頭禪(開場+收尾),讓發言帶個人風格(資訊照舊保留)。
+function flavorize(v: BotView, prefix: string, core: string): string {
+  const f = v.personaFlavor ?? { open: '', close: '' };
+  return `${prefix}${f.open}${core}${f.close}`;
+}
+
 function noInfoLine(v: BotView, prefix: string, animal: AnimalId | null): string {
   const pick = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
   if (animal === null) {
-    return prefix + pick(['我還看不太準,再觀察觀察。', '這輪我沒什麼把握,先聽大家的。', '目前我持保留態度,不好說。']);
+    return flavorize(v, prefix, pick(['我還看不太準,再觀察觀察。', '這輪我沒什麼把握,先聽大家的。', '目前我持保留態度,不好說。']));
   }
   const a = ANIMALS[animal];
   const opts = v.camp === 'GOOD'
     ? [`我猜「${a}」這件比較可疑,大家多留意。`, `「${a}」我看著有點不對,不太敢保。`, `要我說,「${a}」得盯緊一點。`]
     : [`「${a}」我覺得沒問題,可以保下來。`, `依我看「${a}」是對的,別漏了牠。`, `「${a}」這件我傾向留著。`];
-  return prefix + pick(opts);
+  return flavorize(v, prefix, pick(opts));
 }
 
-function tail(v: BotView): string {
-  const opts = v.camp === 'GOOD'
-    ? ['大家把真的護住,別被帶走。', '有疑點的就說清楚。', '照證據走,別亂猜。']
-    : ['你們再想想,別急著下結論。', '我覺得有人在帶風向。', '別一面倒,留點餘地。'];
-  return opts[Math.floor((v.pub.roundIndex + v.seat.length) % opts.length)];
-}
+function tail(_v: BotView): string { return ''; }
+
