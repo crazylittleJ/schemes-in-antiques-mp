@@ -10,6 +10,7 @@ export interface SpeechContext {
   roundIndex: number;           // 0..2
   roundAnimals: number[];       // 本輪獸首 id
   myIntel: string;              // 本輪自己的鑑定/查驗結果(自然語句)
+  directive?: string | null;    // 本輪發言指引(例如沒情報時:這次請點名某獸首/或講模糊)
   chatHistory: string;          // 近期聊天逐字(含人類與其他 AI)
   replyTo?: { name: string; text: string } | null; // 即時回嘴:要針對誰的哪句話回應
 }
@@ -74,7 +75,7 @@ ${ctx.replyTo.name} 剛剛說:「${ctx.replyTo.text}」`
   const user = `# 本輪資訊(第 ${ctx.roundIndex + 1} 輪)
 - 桌上正在鑑定的獸首:${animals}
 - 你本輪的情報:${ctx.myIntel || '本輪你沒有取得明確情報。'}
-${replyBlock}
+${ctx.directive ? `\n# 本輪發言指引(請遵守)\n${ctx.directive}` : ''}${replyBlock}
 
 # 近期聊天紀錄
 ${ctx.chatHistory || '(目前還沒有人發言,請你帶起話題。)'}

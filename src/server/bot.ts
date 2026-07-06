@@ -119,24 +119,27 @@ export function intelSentence(v: BotView): string {
 // speechIntel:給「發言」用的情報,會依角色做限制,避免暴露身分。
 // - 許願:一回合會驗兩件,但發言只講「一件最有利的」,以免被看出是許願。
 // - 方震:不會鑑寶、真本事是查陣營;發言絕不透露查陣營,只給模型一個「用鑑寶口吻暗示」的私下方向。
-function speechIntel(v: BotView): string {
+function speechIntel(v: BotView): { intel: string; directive: string | null; guess: AnimalId | null } {
   const { real, fake, factions } = myResultsThisRound(v);
   const A = (a: AnimalId) => ANIMALS[a];
+  const withInfo = (intel: string) => ({ intel, directive: null, guess: null });
+  const noInfo = () => { const g = decideNoInfo(v); return { intel: '本輪你沒有明確情報。', directive: noInfoDirective(v, g), guess: g }; };
   if (v.role === '方震') {
     const bad = factions.filter((f) => f.camp === 'BAD').map((f) => v.nameOf(f.id));
     const good = factions.filter((f) => f.camp === 'GOOD').map((f) => v.nameOf(f.id));
     const hint: string[] = [];
     if (bad.length) hint.push(`你「私下」知道 ${bad.join('、')} 不可信,但只能用「他對某件的鑑定不對」這種鑑寶口吻暗中質疑,絕不可說出你能看穿身分`);
     if (good.length) hint.push(`你「私下」知道 ${good.join('、')} 可信,可以順著他`);
-    if (!hint.length) return '本輪你沒有明確方向,就用鑑寶行話穩住場面、觀察大家。';
-    return hint.join(';') + '。';
+    if (!hint.length) return noInfo(); // 沒查到有用資訊 → 裝鑑寶點名一個獸首 or 模糊
+    return withInfo(hint.join(';') + '。');
   }
   if (v.role === '許願') {
-    if (real.length) return `你確定「${A(real[0])}」是真的,主張把牠保下來(只講這一件,別把你驗到的全講出來)。`;
-    if (fake.length) return `你確定「${A(fake[0])}」是假的,提醒大家別在牠身上浪費籌碼(只講這一件)。`;
-    return '本輪你沒有明確情報。';
+    if (real.length) return withInfo(`你確定「${A(real[0])}」是真的,主張把牠保下來(只講這一件,別把你驗到的全講出來)。`);
+    if (fake.length) return withInfo(`你確定「${A(fake[0])}」是假的,提醒大家別在牠身上浪費籌碼(只講這一件)。`);
+    return noInfo();
   }
-  return intelSentence(v);
+  const base = intelSentence(v);
+  return base ? withInfo(base) : noInfo();
 }
 
 // ── 發言:有金鑰用 Gemini,否則退回 persona 啟發式 ───────────────────────
@@ -146,7 +149,8 @@ function recentChat(v: BotView, n = 8): string {
 
 // replyTo:若這一輪輪到本 bot 前,有人(通常是真人)剛發言,可在「自己回合」順順接話回應(仍遵守發言順序)。
 export async function generateSpeech(v: BotView, replyTo?: { name: string; text: string } | null): Promise<{ text: string; thought?: string }> {
-  const intel = speechIntel(v);
+  const { intel, directive, guess } = speechIntel(v);
+  const prefix = replyTo ? `${replyTo.name},` : '';
   const { system, user } = buildSpeechPrompts({
     displayName: v.displayName,
     role: v.role,
@@ -155,12 +159,18 @@ export async function generateSpeech(v: BotView, replyTo?: { name: string; text:
     roundIndex: v.pub.roundIndex,
     roundAnimals: v.pub.roundAnimals,
     myIntel: intel,
+    directive,
     chatHistory: recentChat(v),
     replyTo: replyTo ?? null,
   });
   const g = await geminiSpeech(system, user);
-  if (g && g.result) return { text: g.result.replace(/\s+/g, ' ').trim().slice(0, 150), thought: g.thought };
-  return { text: heuristicSpeech(v, intel, replyTo) };
+  if (g && g.result) {
+    let text = g.result.replace(/\s+/g, ' ').trim().slice(0, 150);
+    // 安全網:這次「該點名 guess」但 Gemini 沒講出任何獸首 → 退回點名版,確保 85/15 體感穩定
+    if (guess !== null && !/[鼠牛虎兔龍蛇馬羊猴雞狗豬]/.test(text)) text = noInfoLine(v, prefix, guess);
+    return { text, thought: g.thought };
+  }
+  return { text: heuristicSpeech(v, replyTo, guess) };
 }
 
 // 投票決策:有金鑰用 Gemini 決定保護哪些獸首,否則用啟發式決策樹(allocateVotes)
@@ -204,10 +214,11 @@ function spread(picks: AnimalId[], chips: number): Record<AnimalId, number> {
 }
 
 // 無金鑰時的 persona 啟發式發言:用角色語氣 + 本輪情報拼一句,不暴露身份。
-function heuristicSpeech(v: BotView, intel: string, replyTo?: { name: string; text: string } | null): string {
+function heuristicSpeech(v: BotView, replyTo?: { name: string; text: string } | null, guess?: AnimalId | null): string {
   const { real, fake } = myResultsThisRound(v);
   const A = (a: AnimalId) => ANIMALS[a];
   const prefix = replyTo ? `${replyTo.name},` : '';
+  const g = guess === undefined ? decideNoInfo(v) : guess; // 與 Gemini 路徑用同一個已決定的獸首
   // 方震/許願:啟發式也用角色口吻,但沒把握時改走 noInfoLine(優先點名、少數才模糊)
   if (v.role === '方震' || v.role === '許願') {
     const one = real[0] ?? fake[0];
@@ -215,7 +226,7 @@ function heuristicSpeech(v: BotView, intel: string, replyTo?: { name: string; te
       const isReal = real.includes(one);
       return `${prefix}我看「${A(one)}」這件${isReal ? '對,該保下來' : '氣息不對,別浪費籌碼'}。${tail(v)}`;
     }
-    return noInfoLine(v, prefix);
+    return noInfoLine(v, prefix, g);
   }
   if (real.length || fake.length) {
     // 壞人「誤導優先」:預設顛倒真假(中間輪偶爾說真話洗白);好人照實。
@@ -228,17 +239,37 @@ function heuristicSpeech(v: BotView, intel: string, replyTo?: { name: string; te
     return prefix + segs.join(',') + '。' + tail(v);
   }
   // 沒情報:優先「猜一個獸首」點名帶風向,少數情況才講得模糊
-  return noInfoLine(v, prefix);
+  return noInfoLine(v, prefix, g);
 }
 
 // 沒把握時:約 85% 仍點一個獸首來講(用猜的、語氣保守),約 15% 才講得模糊不點名。
-function noInfoLine(v: BotView, prefix: string): string {
-  const pick = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
+// 沒把握時擲一次骰:約 85% 回傳一個要點名的獸首,約 15% 回 null(這次講模糊)。
+// 隨機性放在程式端 → 比例精準;實際遣詞交給 Gemini(依角色語氣)或 noInfoLine(離線)。
+function decideNoInfo(v: BotView): AnimalId | null {
   const ra = v.pub.roundAnimals;
-  if (ra.length === 0 || Math.random() < 0.15) {
+  if (ra.length === 0 || Math.random() < 0.15) return null;
+  return ra[Math.floor(Math.random() * ra.length)];
+}
+
+// 給 Gemini 的「沒情報」發言指引:要嘛點名指定獸首(用猜的、保守語氣),要嘛講模糊。
+function noInfoDirective(v: BotView, animal: AnimalId | null): string {
+  if (animal === null) {
+    return '本輪你沒有明確情報。請用你自己的口吻把話講得「模糊、不點名任何獸首」(例如還看不準、先觀望、聽大家的),但仍要有你的性格。';
+  }
+  const a = ANIMALS[animal];
+  const lean = v.camp === 'GOOD'
+    ? `暗示「${a}」有點可疑、值得大家多留意`
+    : `把「${a}」說成應該是對的、可以保下來(藉此誤導好人)`;
+  return `本輪你沒有明確情報,但這次請「用猜的」點名一個獸首:${lean};語氣要保守、可帶不確定,但**一定要講出「${a}」這個名字**,而且只聚焦這一個獸首。`;
+}
+
+// 啟發式(離線)沒情報發言:依 animal 決定點名或模糊(animal 由 decideNoInfo 事先決定)。
+function noInfoLine(v: BotView, prefix: string, animal: AnimalId | null): string {
+  const pick = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
+  if (animal === null) {
     return prefix + pick(['我還看不太準,再觀察觀察。', '這輪我沒什麼把握,先聽大家的。', '目前我持保留態度,不好說。']);
   }
-  const a = ANIMALS[pick(ra)];
+  const a = ANIMALS[animal];
   const opts = v.camp === 'GOOD'
     ? [`我猜「${a}」這件比較可疑,大家多留意。`, `「${a}」我看著有點不對,不太敢保。`, `要我說,「${a}」得盯緊一點。`]
     : [`「${a}」我覺得沒問題,可以保下來。`, `依我看「${a}」是對的,別漏了牠。`, `「${a}」這件我傾向留著。`];
