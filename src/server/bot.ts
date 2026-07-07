@@ -50,12 +50,13 @@ export function botCandidates(v: BotView): Action[] {
     const remaining = p.seatOrder.filter((x) => !p.turn.actedPlayers.includes(x) && x !== seat);
     if (p.turn.subStep === 'AWAIT_IDENTIFY') {
       if (v.role === '方震') {
-        // 查驗一位還沒查過、且非自己的玩家(逐一當候選,引擎會擋已查過的)
-        for (const t of p.seatOrder) if (t !== seat) out.push({ type: 'VIEW_FACTION', player: seat, targetId: t });
+        // 隨機挑還沒查過的玩家(分散查驗對象,別總是查同一個順位)
+        for (const t of shuffled(p.seatOrder)) if (t !== seat) out.push({ type: 'VIEW_FACTION', player: seat, targetId: t });
       } else if (v.role === '許願') {
-        if (ra.length >= 2) out.push({ type: 'IDENTIFY', player: seat, animalIds: [ra[0], ra[1]] });
+        const two = shuffled(ra).slice(0, 2); // 每回合隨機挑兩件鑑定,別固定頭兩件
+        if (two.length >= 2) out.push({ type: 'IDENTIFY', player: seat, animalIds: [two[0], two[1]] });
       } else {
-        for (const a of ra) out.push({ type: 'IDENTIFY', player: seat, animalIds: [a] });
+        for (const a of shuffled(ra)) out.push({ type: 'IDENTIFY', player: seat, animalIds: [a] }); // 隨機鑑定一件 → 全桌情報更分散
       }
       out.push({ type: 'SKIP_IDENTIFY', player: seat }); // 被封鎖/失能者退到這
     } else if (p.turn.subStep === 'AWAIT_ABILITY') {
@@ -88,13 +89,50 @@ export function botCandidates(v: BotView): Action[] {
 
 // 投票:只押「自己有把握的獸首」——好人押驗到的真品、壞人押驗到的假品(誤導)。
 // 不確定(本輪沒驗到相關結果)就「保留票數」到下一輪,不亂投。非最後一輪也會留一點餘裕。
+// 投票:依「把握程度 + 隨機性」決定 保留 / 分散 / 全壓。
+// 高把握(直接鑑定到)= 集中但偶爾灑一張煙霧;中把握(只有反面資訊,用推測)= 押 1~2 張;
+// 沒把握 = 多數保留,但有機率投一張探路(避免整排掛零,好人也能參與)。
 function allocateVotes(v: BotView): Record<AnimalId, number> {
+  if (v.chips <= 0) return {};
+  const ra = v.pub.roundAnimals;
   const { real, fake } = myResultsThisRound(v);
-  const targets = (v.camp === 'GOOD' ? real : fake).filter((a) => v.pub.roundAnimals.includes(a));
-  if (targets.length === 0 || v.chips <= 0) return {}; // 沒把握 → 保留票數(棄權),留到下一輪
-  const isLastRound = v.pub.roundIndex >= 2; // 最後一輪票不會留下 → 全押;其餘留餘裕
-  const budget = isLastRound ? v.chips : Math.min(v.chips, targets.length * 2);
-  return spread(targets, budget);
+  const isLast = v.pub.roundIndex >= 2; // 最後一輪票不留下 → 傾向用完
+  const rnd = Math.random;
+
+  // 該保護的候選:好人保真、壞人保假;善用反面資訊(知道假的→其餘較可能真,反之亦然)
+  let confident: AnimalId[] = [];
+  let strong = false; // 是否為「直接鑑定到」的高把握
+  if (v.camp === 'GOOD') {
+    if (real.length) { confident = real.filter((a) => ra.includes(a)); strong = true; }
+    else if (fake.length) confident = ra.filter((a) => !fake.includes(a));
+  } else {
+    if (fake.length) { confident = fake.filter((a) => ra.includes(a)); strong = true; }
+    else if (real.length) confident = ra.filter((a) => !real.includes(a));
+  }
+
+  if (strong && confident.length) {
+    const r = rnd();
+    const budget = isLast ? v.chips
+      : r < 0.25 ? Math.min(v.chips, confident.length)        // 保留:只押一點
+      : r < 0.6 ? Math.min(v.chips, confident.length * 2)     // 分散:標準
+      : v.chips;                                              // 全壓
+    const alloc = spread(confident, budget);
+    const spent = Object.values(alloc).reduce((s, n) => s + n, 0);
+    if (!isLast && spent < v.chips && rnd() < 0.3) {          // 30% 再灑一張煙霧到別件
+      const others = ra.filter((a) => !(a in alloc));
+      if (others.length) alloc[others[Math.floor(rnd() * others.length)]] = 1;
+    }
+    return alloc;
+  }
+
+  if (confident.length) { // 中把握(靠反面推測)→ 押 1~2 張
+    const budget = isLast ? v.chips : Math.min(v.chips, 1 + (rnd() < 0.5 ? 1 : 0));
+    return spread(shuffled(confident), budget);
+  }
+
+  // 完全沒把握:一半機率保留、一半機率投一張探路
+  if (rnd() < 0.5) return {};
+  return { [ra[Math.floor(rnd() * ra.length)]]: Math.min(v.chips, isLast ? v.chips : 1) };
 }
 
 // 身份猜測(啟發式):排除已知隊友(老朝奉↔藥不然 互知,絕不互指);好人優先猜「沒驗成好人」的對象。
@@ -204,6 +242,13 @@ export async function decideVote(v: BotView): Promise<Record<AnimalId, number>> 
 }
 
 // 把籌碼平均分到 picks 上(總和 ≤ chips)
+// Fisher–Yates 洗牌(不改原陣列)
+function shuffled<T>(arr: readonly T[]): T[] {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  return a;
+}
+
 function spread(picks: AnimalId[], chips: number): Record<AnimalId, number> {
   const alloc: Record<AnimalId, number> = {};
   let left = chips;
