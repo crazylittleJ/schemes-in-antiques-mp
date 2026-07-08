@@ -363,7 +363,7 @@ export class GudongRoom extends Room<GudongState> {
       nameOf: (id) => this.state.names.get(id) ?? id,
       displayName: this.state.names.get(seat) ?? seat,
       personaVoice: this.botPersona[seat]?.voice ?? '',
-      personaFlavor: this.botPersona[seat]?.flavor ?? { open: '', close: '' },
+      personaFlavor: this.botPersona[seat]?.flavor ?? { open: [''], close: [''] },
       teammateSeat,
       chat: this.state.chat.map((m) => ({ name: m.name, text: m.text, round: m.round })),
     };

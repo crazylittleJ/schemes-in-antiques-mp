@@ -97,6 +97,7 @@ export interface VoteContext {
   myIntel: string;
   chips: number;            // 手上籌碼數
   chatHistory: string;
+  voteHistory?: string;     // 歷史投票摘要(每輪保護真/假 + 誰投贗品),供推理
 }
 
 export function buildVotePrompts(ctx: VoteContext): { system: string; user: string } {
@@ -114,6 +115,7 @@ export function buildVotePrompts(ctx: VoteContext): { system: string; user: stri
 - 本輪桌上獸首:${animals}
 - 你手上的籌碼:${ctx.chips}
 - 你本輪的情報:${ctx.myIntel || '本輪你沒有明確情報,請依推理與聊天判斷。'}
+${ctx.voteHistory ? `\n# 歷史投票(可據此推理誰在保護贗品、哪些是真品)\n${ctx.voteHistory}` : ''}
 
 # 近期聊天紀錄
 ${ctx.chatHistory || '(沒有發言紀錄)'}

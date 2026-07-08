@@ -18,7 +18,7 @@ export interface BotView {
   nameOf: (id: PlayerId) => string;
   displayName: string;             // 例:Leo(AI)
   personaVoice: string;            // 此 AI 的說話語氣/性格
-  personaFlavor?: { open: string; close: string }; // 離線啟發式口頭禪(開場/收尾)
+  personaFlavor?: { open: string[]; close: string[] }; // 離線啟發式口頭禪(開場/收尾,各多種隨機選)
   teammateSeat: PlayerId | null;   // 老朝奉↔藥不然 互知的隊友座位(其他角色為 null)
   chat: { name: string; text: string; round: number }[];
 }
@@ -79,10 +79,11 @@ export function botCandidates(v: BotView): Action[] {
   } else if (p.phase === 'REVEAL') {
     out.push({ type: 'CONTINUE', player: seat });
   } else if (p.phase === 'IDENTITY_REVEAL') {
-    const other = p.seatOrder.find((x) => x !== seat && x !== v.teammateSeat)!;
-    if (v.role === '老朝奉') out.push({ type: 'GUESS_XU', player: seat, targetId: guessTarget(v) ?? other });
-    else if (v.role === '藥不然') out.push({ type: 'GUESS_FANG', player: seat, targetId: guessTarget(v) ?? other });
-    else if (v.camp === 'GOOD') out.push({ type: 'GUESS_LAO', player: seat, targetId: guessTarget(v) ?? other });
+    const others = shuffled(p.seatOrder.filter((x) => x !== seat && x !== v.teammateSeat));
+    const fb = others[0] ?? p.seatOrder.find((x) => x !== seat)!; // 保底目標
+    if (v.role === '老朝奉') { out.push({ type: 'GUESS_XU', player: seat, targetId: guessGoodLeader(v) ?? fb }); out.push({ type: 'GUESS_XU', player: seat, targetId: fb }); }
+    else if (v.role === '藥不然') { out.push({ type: 'GUESS_FANG', player: seat, targetId: guessGoodLeader(v) ?? fb }); out.push({ type: 'GUESS_FANG', player: seat, targetId: fb }); }
+    else if (v.camp === 'GOOD') { out.push({ type: 'GUESS_LAO', player: seat, targetId: guessLao(v) ?? fb }); out.push({ type: 'GUESS_LAO', player: seat, targetId: fb }); }
   }
   return out;
 }
@@ -136,11 +137,47 @@ function allocateVotes(v: BotView): Record<AnimalId, number> {
 }
 
 // 身份猜測(啟發式):排除已知隊友(老朝奉↔藥不然 互知,絕不互指);好人優先猜「沒驗成好人」的對象。
-function guessTarget(v: BotView): PlayerId | null {
+// 嫌疑分數:用「歷史投票 vs 已開牌真偽」推理。保護開出來是假的獸首 → 可疑(押越多越可疑);
+// 保護開出來是真的 → 較不可疑。分數越高 = 越可能是壞人/老朝奉。
+function suspicionScore(v: BotView, pid: PlayerId): number {
+  let s = 0;
+  for (const vr of v.pub.voteRounds) {
+    const alloc = vr.breakdown.find((b) => b.seat === pid)?.alloc ?? {};
+    for (const [aStr, chips] of Object.entries(alloc)) {
+      const a = Number(aStr);
+      if (!(a in v.pub.revealedReal)) continue; // 真偽未知的先不算
+      s += v.pub.revealedReal[a] ? -0.6 * chips : 1.0 * chips;
+    }
+  }
+  return s;
+}
+
+function eligibleTargets(v: BotView): PlayerId[] {
   const { factions } = myResultsThisRound(v);
   const knownGood = new Set(factions.filter((f) => f.camp === 'GOOD').map((f) => f.id));
-  const cand = v.pub.seatOrder.filter((x) => x !== v.seat && x !== v.teammateSeat && !knownGood.has(x));
-  return cand[0] ?? null;
+  return v.pub.seatOrder.filter((x) => x !== v.seat && x !== v.teammateSeat && !knownGood.has(x));
+}
+
+// 猜老朝奉(好人用):偏向嫌疑最高者,但加雜訊 + 從前段隨機挑,
+// 因為「投錯不一定是壞人,也可能是被誤導的好人」,且避免所有 AI 指同一人。
+function guessLao(v: BotView): PlayerId | null {
+  const cand = eligibleTargets(v);
+  if (!cand.length) return null;
+  const scored = cand.map((x) => ({ x, s: suspicionScore(v, x) + Math.random() * 0.8 }));
+  scored.sort((a, b) => b.s - a.s);
+  const topK = scored.slice(0, Math.min(2, scored.length)); // 嫌疑前兩名裡隨機
+  return topK[Math.floor(Math.random() * topK.length)].x;
+}
+
+// 猜好人首領(壞人用:老朝奉猜許願、藥不然猜方震):好人首領通常保護真品→嫌疑低,
+// 傾向從「較不可疑」的人裡隨機挑,並保留隨機性。
+function guessGoodLeader(v: BotView): PlayerId | null {
+  const cand = eligibleTargets(v);
+  if (!cand.length) return null;
+  const scored = cand.map((x) => ({ x, s: suspicionScore(v, x) + Math.random() * 0.8 }));
+  scored.sort((a, b) => a.s - b.s); // 由低到高
+  const topK = scored.slice(0, Math.min(2, scored.length));
+  return topK[Math.floor(Math.random() * topK.length)].x;
 }
 
 // ── 本輪情報的自然語句 ─────────────────────────────────────────
@@ -182,8 +219,26 @@ function speechIntel(v: BotView): { intel: string; directive: string | null; gue
 }
 
 // ── 發言:有金鑰用 Gemini,否則退回 persona 啟發式 ───────────────────────
-function recentChat(v: BotView, n = 8): string {
-  return v.chat.slice(-n).map((m) => `${m.name}:${m.text}`).join('\n');
+function recentChat(v: BotView, n = 10): string {
+  return v.chat.slice(-n).map((m) => `[第${m.round + 1}輪] ${m.name}:${m.text}`).join('\n');
+}
+
+// 歷史投票摘要(給 Gemini 推理用):每輪保護到什麼(真/假)、以及誰把票投在「開出來是假」的獸首上。
+function voteHistorySummary(v: BotView): string {
+  if (!v.pub.voteRounds.length) return '';
+  const A = (a: AnimalId) => ANIMALS[a];
+  const lines: string[] = [];
+  for (const vr of v.pub.voteRounds) {
+    const prot = (vr.top ?? []).map((a) => `${A(a)}(${a in v.pub.revealedReal ? (v.pub.revealedReal[a] ? '真' : '假') : '?'})`).join('、');
+    const badVoters: string[] = [];
+    for (const b of vr.breakdown) {
+      let fakeChips = 0;
+      for (const [aStr, c] of Object.entries(b.alloc)) { const a = Number(aStr); if (v.pub.revealedReal[a] === false) fakeChips += c; }
+      if (fakeChips > 0 && b.seat !== v.seat) badVoters.push(`${v.nameOf(b.seat)} 投了${fakeChips}票在贗品`);
+    }
+    lines.push(`第${vr.round + 1}輪保護:${prot}${badVoters.length ? ';可疑:' + badVoters.join('、') : ''}`);
+  }
+  return lines.join('\n');
 }
 
 // replyTo:若這一輪輪到本 bot 前,有人(通常是真人)剛發言,可在「自己回合」順順接話回應(仍遵守發言順序)。
@@ -217,7 +272,7 @@ export async function decideVote(v: BotView): Promise<Record<AnimalId, number>> 
   const { system, user } = buildVotePrompts({
     displayName: v.displayName, role: v.role, camp: v.camp, personaVoice: v.personaVoice,
     roundIndex: v.pub.roundIndex, roundAnimals: v.pub.roundAnimals,
-    myIntel: intelSentence(v), chips: v.chips, chatHistory: recentChat(v),
+    myIntel: intelSentence(v), chips: v.chips, chatHistory: recentChat(v), voteHistory: voteHistorySummary(v),
   });
   const schema = {
     type: 'OBJECT',
@@ -312,8 +367,9 @@ function noInfoDirective(v: BotView, animal: AnimalId | null): string {
 // 啟發式(離線)沒情報發言:依 animal 決定點名或模糊(animal 由 decideNoInfo 事先決定)。
 // 把一句「資訊核心」套上該角色的口頭禪(開場+收尾),讓發言帶個人風格(資訊照舊保留)。
 function flavorize(v: BotView, prefix: string, core: string): string {
-  const f = v.personaFlavor ?? { open: '', close: '' };
-  return `${prefix}${f.open}${core}${f.close}`;
+  const f = v.personaFlavor ?? { open: [''], close: [''] };
+  const pick = (arr: string[]) => (arr.length ? arr[Math.floor(Math.random() * arr.length)] : '');
+  return `${prefix}${pick(f.open)}${core}${pick(f.close)}`;
 }
 
 function noInfoLine(v: BotView, prefix: string, animal: AnimalId | null): string {
