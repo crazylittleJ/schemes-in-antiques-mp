@@ -280,7 +280,7 @@ function heuristicSpeech(v: BotView, replyTo?: { name: string; text: string } | 
     const claimReal = lie ? fake : real;
     const claimFake = lie ? real : fake;
     const segs: string[] = [];
-    if (claimReal.length) segs.push(`我看「${claimReal.map(A).join('、')}」這幾件對,該保下來`);
+    if (claimReal.length) segs.push(`我看「${claimReal.map(A).join('、')}」這件對,該保下來`);
     if (claimFake.length) segs.push(`「${claimFake.map(A).join('、')}」氣息不對,別浪費籌碼`);
     return flavorize(v, prefix, segs.join(',') + '。');
   }
