@@ -63,8 +63,9 @@ export function botCandidates(v: BotView): Action[] {
       if (v.role === '老朝奉') {
         out.push({ type: 'USE_ABILITY', player: seat }); // 顛倒黑白
       } else if (v.role === '藥不然') {
-        // 通常不偷襲已知隊友(老朝奉);優先襲擊還沒行動的非隊友
-        const tgt = remaining.find((x) => x !== v.teammateSeat)
+        // 偷襲對象偏向「覺得是方震(好人)」的人;偷襲方震會連帶偷襲許願,價值高。權重較高,但保留隨機。不打已知隊友。
+        const pool = remaining.filter((x) => x !== v.teammateSeat);
+        const tgt = weightedPick(pool, (t) => 1 + Math.max(0, beliefGood(v, t)) * 1.5)
           ?? p.seatOrder.find((x) => x !== seat && x !== v.teammateSeat);
         if (tgt) out.push({ type: 'USE_ABILITY', player: seat, targetId: tgt });
       } else if (v.role === '鄭國渠') {
@@ -72,7 +73,9 @@ export function botCandidates(v: BotView): Action[] {
       }
       out.push({ type: 'SKIP_ABILITY', player: seat });
     } else if (p.turn.subStep === 'AWAIT_PASS') {
-      for (const t of remaining) out.push({ type: 'PASS_TURN', player: seat, targetId: t });
+      const first = weightedPick(remaining, (t) => passWeight(v, t)); // 依信念+基本權重加權隨機
+      if (first) out.push({ type: 'PASS_TURN', player: seat, targetId: first });
+      for (const t of shuffled(remaining)) out.push({ type: 'PASS_TURN', player: seat, targetId: t }); // 保底
     }
   } else if (p.phase === 'VOTE') {
     out.push({ type: 'SUBMIT_VOTE', player: seat, allocation: allocateVotes(v) });
@@ -150,6 +153,39 @@ function suspicionScore(v: BotView, pid: PlayerId): number {
     }
   }
   return s;
+}
+
+// 跨回合已查到的陣營(方震累積的查驗)
+function knownFaction(v: BotView, pid: PlayerId): Camp | null {
+  let f: Camp | null = null;
+  for (const e of v.myLog) if (e.kind === 'FACTION_RESULT' && (e as any).targetId === pid) f = (e as any).camp;
+  return f;
+}
+
+// 對某玩家「偏好人(+)還是偏壞人(−)」的信念:直接查到最強,否則用投票嫌疑推。約 [-3,+3]。
+function beliefGood(v: BotView, pid: PlayerId): number {
+  const kf = knownFaction(v, pid);
+  if (kf === 'GOOD') return 3;
+  if (kf === 'BAD') return -3;
+  return Math.max(-2, Math.min(2, -suspicionScore(v, pid))); // 高嫌疑→偏壞
+}
+
+// 加權隨機挑一個(每人都有基本權重 → 保留隨機/試探空間)
+function weightedPick<T>(items: T[], weight: (t: T) => number): T | null {
+  if (!items.length) return null;
+  const ws = items.map((t) => Math.max(0.05, weight(t)));
+  const sum = ws.reduce((a, b) => a + b, 0);
+  let r = Math.random() * sum;
+  for (let i = 0; i < items.length; i++) { r -= ws[i]; if (r <= 0) return items[i]; }
+  return items[items.length - 1];
+}
+
+// 交棒(PASS_TURN)對象的權重:基本權重 1(人人有機會),再依角色策略加成。
+function passWeight(v: BotView, pid: PlayerId): number {
+  const g = beliefGood(v, pid);
+  if (v.role === '鄭國渠') return 1 + Math.max(0, -g) * 0.5; // 偏向交給「覺得是壞人」的
+  // 好人:想把棒子交給隊友發揮;老朝奉/藥不然:想把干擾/煙霧丟給好人 → 都偏向「覺得是好人」的,但保留基本權重
+  return 1 + Math.max(0, g) * 0.8;
 }
 
 function eligibleTargets(v: BotView): PlayerId[] {
