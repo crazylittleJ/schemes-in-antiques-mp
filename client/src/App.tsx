@@ -84,6 +84,7 @@ export default function App() {
   const [error, setError] = useState('');
   const [connecting, setConnecting] = useState(true);
   const [showHelp, setShowHelp] = useState(false);
+  const [showChars, setShowChars] = useState(false);
   const [gankedTurn, setGankedTurn] = useState(false); // 本回合被藥不然偷襲
   const [jiDisabledTurn, setJiDisabledTurn] = useState(false); // 姬云浮失能:本回合無法鑑定
   const [viewedPlayers, setViewedPlayers] = useState<string[]>([]); // 方震已查看過的玩家
@@ -233,6 +234,7 @@ export default function App() {
         <div aria-hidden style={{ position: 'fixed', inset: 0, zIndex: -2, backgroundImage: 'url(/bg.jpg)', backgroundSize: 'cover', backgroundPosition: 'center', opacity: 0.6 }} />
         <div aria-hidden style={{ position: 'fixed', inset: 0, zIndex: -1, background: 'rgba(255,255,255,0.4)' }} />
         {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
+        {showChars && <AICharactersModal onClose={() => setShowChars(false)} />}
         <h1>古董局中局</h1>
         <div style={{ background: '#fff3d6', border: '1px solid #e6c14d', color: '#7a5b00', borderRadius: 8, padding: '10px 12px', margin: '8px 0', fontSize: 14 }}>
           📌 重新整理、切到 LINE、鎖屏都沒關係——回來會用你的<b>暱稱+密碼自動接回原座位</b>(可能需等幾秒讓伺服器確認舊連線已離線;若沒馬上回到、停在「房間準備」畫面，<b>再重新整理一次</b>即可)。請盡量別<b>完全關閉分頁</b>。房主離開會結束整局。
@@ -273,6 +275,7 @@ export default function App() {
         </Field>
         <button style={btn} onClick={join}>進入房間 {slot}</button>
         <button style={textBtn} onClick={() => setShowHelp(true)}>遊戲說明</button>
+        <button style={textBtn} onClick={() => setShowChars(true)}>AI 角色介紹</button>
         {error && <p style={{ color: 'crimson' }}>{error}</p>}
       </Shell>
     );
@@ -687,6 +690,48 @@ function EndDetailView({ s, nameOf }: any) {
 const GOOD_ROLE_NAMES = ['許願', '方震', '黃煙煙', '木戶加奈', '姬云浮'];
 function RoleName({ n }: { n: string }) {
   return <b style={{ color: GOOD_ROLE_NAMES.includes(n) ? '#0ea5e9' : '#ea580c' }}>{n}</b>;
+}
+
+// 首頁「AI 角色介紹」——12 位可能出場的 AI 玩家(隨機抽出、動物也會說人話)
+const AI_CHARACTERS: { id: string; name: string; kind: string; desc: string }[] = [
+  { id: 'leo',     name: 'Leo',     kind: '男性・20 多歲',   desc: '年輕有活力,講話直來直往、帶點網路用語。' },
+  { id: 'bella',   name: 'Bella',   kind: '女性・30 多歲',   desc: '熱情健談,喜歡帶氣氛、舉例分析。' },
+  { id: 'barnaby', name: 'Barnaby', kind: '老狗・年長',       desc: '忠厚穩重的老狗,慢條斯理,愛用「氣味」打比方。' },
+  { id: 'aisha',   name: 'Aisha',   kind: '女性・青少年',     desc: '直率的少女,語速快、情緒外放、敢說。' },
+  { id: 'kai',     name: 'Kai',     kind: '男性・40 多歲',   desc: '沉穩務實的大叔,講重點不囉嗦。' },
+  { id: 'pip',     name: 'Pip',     kind: '企鵝・成年',       desc: '呆萌又認真的企鵝,偶爾用冰天雪地打比方。' },
+  { id: 'lola',    name: 'Lola',    kind: '女性・60 多歲',   desc: '慈祥的阿嬤,溫和愛叮嚀,偶爾碎念兩句。' },
+  { id: 'xiaojie', name: '小潔',    kind: '女性・約 13 歲',   desc: '超自然現象偵探事務所的助手,常抱著純黑黑貓、穿黑和服。平常略害羞,但一抓到線索就聰慧犀利、條理分明。' },
+  { id: 'jasper',  name: 'Jasper',  kind: '貓・成年',         desc: '慵懶傲嬌、有點毒舌的貓,語帶不屑其實很精。' },
+  { id: 'toby',    name: 'Toby',    kind: '男性・50 多歲',   desc: '老派紳士,用詞文雅講究,溫文但有威嚴。' },
+  { id: 'zara',    name: 'Zara',    kind: '女性・20 多歲',   desc: '自信外向、俐落,該嗆的時候不留情面。' },
+  { id: 'luna',    name: 'Luna',    kind: '小狗・幼犬',       desc: '興奮的小奶狗,天真熱情,偶爾忍不住「汪」一聲。' },
+];
+
+function AICharactersModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div style={overlay} onClick={onClose}>
+      <div style={modal} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, background: '#fff', paddingBottom: 8 }}>
+          <h2 style={{ margin: 0 }}>AI 角色介紹</h2>
+          <button style={btn} onClick={onClose}>關閉</button>
+        </div>
+        <p style={{ color: '#666', fontSize: 14, marginTop: 4 }}>
+          房主可在等待房內「加入 AI 玩家」。AI 會從下列 12 位中<b>隨機抽出、不重複</b>,顯示為「名字(AI)」;動物在這款遊戲裡也會說人話。每位個性不同,發言與投票會帶各自的口吻。
+        </p>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 10, marginTop: 8 }}>
+          {AI_CHARACTERS.map((c) => (
+            <div key={c.id} style={{ border: '1px solid #e3e3df', borderRadius: 10, padding: 10, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', background: '#fafafa' }}>
+              <img src={`/avatars/${c.id}.png`} alt={c.name} style={{ width: 64, height: 64, borderRadius: '50%', objectFit: 'cover' }} />
+              <div style={{ fontWeight: 700, marginTop: 6 }}>{c.name}<span style={{ color: '#2d6cdf', fontSize: 12 }}>(AI)</span></div>
+              <div style={{ color: '#999', fontSize: 12 }}>{c.kind}</div>
+              <div style={{ fontSize: 13, marginTop: 4, lineHeight: 1.5 }}>{c.desc}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function HelpModal({ onClose }: { onClose: () => void }) {
