@@ -108,7 +108,7 @@ export function buildVotePrompts(ctx: VoteContext): { system: string; user: stri
       : '你要把票投在「你相信是贗品」的獸首上,引導大家保護假貨、放掉真品(這對壞人有利);必要時也可佯裝配合。可從聊天判斷好人想保什麼,再決定要不要反著帶。';
   const system = `你正在玩《古董局中局》的投票階段。每位玩家用手上的籌碼票,投給「想保護」的獸首;每輪票數最高的前兩名會被保護。
 你的祕密角色:${ctx.role}(${st.campLabel})。${aim}
-可以「集中」押一件,也可以把票「分散」在你較有把握的 1~2 件上;真的沒把握時可以少投、把票留到下一輪(最後一輪除外)。
+可以「集中」押一件,也可以把票「分散」在你較有把握的 1~2 件上;真的沒把握時可以少投、把票留到下一輪(最後一輪除外——**最後一輪的票不會留到之後,務必全部用掉**)。
 請只回傳純 JSON:{"protect":[獸首中文名, ...],"thought":"理由(可提到你對誰的判斷,但這只在你心裡)"}。protect 內只能放本輪桌上的獸首名稱,可放 1~2 個;不要加 Markdown。`;
   const animals = ctx.roundAnimals.map((a) => ANIMALS[a]).join('、');
   const user = `# 第 ${ctx.roundIndex + 1} 輪投票

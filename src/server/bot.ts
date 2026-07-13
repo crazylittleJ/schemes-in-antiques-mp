@@ -100,7 +100,7 @@ function allocateVotes(v: BotView): Record<AnimalId, number> {
   if (v.chips <= 0) return {};
   const ra = v.pub.roundAnimals;
   const { real, fake } = myResultsThisRound(v);
-  const isLast = v.pub.roundIndex >= 2; // 最後一輪票不留下 → 傾向用完
+  const isLast = v.pub.roundIndex >= 2; // 最後一輪票不結轉 → 一律用完(留票=零效益,反而像 AI)
   const rnd = Math.random;
 
   // 該保護的候選:好人保真、壞人保假;善用反面資訊(知道假的→其餘較可能真,反之亦然)
@@ -116,27 +116,53 @@ function allocateVotes(v: BotView): Record<AnimalId, number> {
 
   if (strong && confident.length) {
     const r = rnd();
+    // 許願資訊量最大(一回合驗兩件),前期就該敢押,別把票全留到最後讓壞人衝票 → 保守分支機率降低、押注量拉高
+    const eager = v.role === '許願';
     const budget = isLast ? v.chips
-      : r < 0.25 ? Math.min(v.chips, confident.length)        // 保留:只押一點
-      : r < 0.6 ? Math.min(v.chips, confident.length * 2)     // 分散:標準
-      : v.chips;                                              // 全壓
+      : eager
+        ? (r < 0.1 ? Math.min(v.chips, confident.length * 2)   // 只有 10% 保守
+          : r < 0.45 ? Math.min(v.chips, confident.length * 3) // 標準也押更重
+          : v.chips)                                            // 55% 全押
+        : (r < 0.25 ? Math.min(v.chips, confident.length)      // 保留:只押一點
+          : r < 0.6 ? Math.min(v.chips, confident.length * 2)  // 分散:標準
+          : v.chips);                                           // 全押
     const alloc = spread(confident, budget);
     const spent = Object.values(alloc).reduce((s, n) => s + n, 0);
     if (!isLast && spent < v.chips && rnd() < 0.3) {          // 30% 再灑一張煙霧到別件
       const others = ra.filter((a) => !(a in alloc));
       if (others.length) alloc[others[Math.floor(rnd() * others.length)]] = 1;
     }
+    if (isLast) return spendAll(v, alloc, confident);          // 最後一輪:確保一張不剩
     return alloc;
   }
 
-  if (confident.length) { // 中把握(靠反面推測)→ 押 1~2 張
+  if (confident.length) { // 中把握(靠反面推測)→ 押 1~2 張;最後一輪全押在推論方向
     const budget = isLast ? v.chips : Math.min(v.chips, 1 + (rnd() < 0.5 ? 1 : 0));
-    return spread(shuffled(confident), budget);
+    const alloc = spread(shuffled(confident), budget);
+    return isLast ? spendAll(v, alloc, confident) : alloc;
   }
 
-  // 完全沒把握:一半機率保留、一半機率投一張探路
+  // 完全沒把握:最後一輪也不棄權 → 押在「推論方向」(好人押尚未確認為假的、壞人反之);其餘輪一半保留、一半探路
+  if (isLast) {
+    const guessPool = ra.filter((a) => (v.camp === 'GOOD' ? !fake.includes(a) : !real.includes(a)));
+    const pool = guessPool.length ? guessPool : ra;
+    const picks = shuffled(pool).slice(0, 1 + (rnd() < 0.5 ? 1 : 0)); // 隨機集中或分散兩件
+    return spendAll(v, spread(picks, v.chips), picks);
+  }
   if (rnd() < 0.5) return {};
-  return { [ra[Math.floor(rnd() * ra.length)]]: Math.min(v.chips, isLast ? v.chips : 1) };
+  return { [ra[Math.floor(rnd() * ra.length)]]: 1 };
+}
+
+// 最後一輪把剩下的票全部灑完(隨機補到已押的目標上),避免留票浪費
+function spendAll(v: BotView, alloc: Record<AnimalId, number>, prefer: AnimalId[]): Record<AnimalId, number> {
+  const targets = (prefer.length ? prefer : v.pub.roundAnimals).slice();
+  let left = v.chips - Object.values(alloc).reduce((s, n) => s + n, 0);
+  while (left > 0 && targets.length) {
+    const a = targets[Math.floor(Math.random() * targets.length)];
+    alloc[a] = (alloc[a] ?? 0) + 1;
+    left--;
+  }
+  return alloc;
 }
 
 // 身份猜測(啟發式):排除已知隊友(老朝奉↔藥不然 互知,絕不互指);好人優先猜「沒驗成好人」的對象。
@@ -325,8 +351,9 @@ export async function decideVote(v: BotView): Promise<Record<AnimalId, number>> 
     const picks = Array.from(new Set(wanted));
     if (picks.length) {
       const isLastRound = v.pub.roundIndex >= 2;
-      const budget = isLastRound ? v.chips : Math.min(v.chips, picks.length * 2);
-      return spread(picks, budget);
+      if (isLastRound) return spendAll(v, {}, picks); // 最後一輪票不結轉 → 一張不留
+      const mult = v.role === '許願' ? 3 : 2;         // 許願資訊多,前期押更重
+      return spread(picks, Math.min(v.chips, picks.length * mult));
     }
   }
   return allocateVotes(v); // 退回啟發式決策樹
