@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- 仿印章:朱紅底 + 「古」字 -->
+  <rect x="2" y="2" width="60" height="60" rx="10" fill="#9b2c2c"/>
+  <rect x="6.5" y="6.5" width="51" height="51" rx="7" fill="none" stroke="#f6e7cf" stroke-width="2.5" opacity="0.9"/>
+  <text x="32" y="33" text-anchor="middle" dominant-baseline="central"
+        font-family="'Noto Serif TC','Songti TC','SimSun',serif" font-size="38" font-weight="700" fill="#f6e7cf">古</text>
+</svg>
