@@ -4,6 +4,7 @@ import { setupGame, applyAction, turnStatusFor, camp } from '../engine/engine';
 import { Action, Effect, GameState, PlayerId, RoleId, Camp } from '../engine/types';
 import { PERSONAS, Persona, aiDisplayName, isReservedName } from './personas';
 import { BotView, botCandidates, generateSpeech, decideVote } from './bot';
+import { nameOwner, claimName, releaseName, releaseRoom } from './nameRegistry';
 
 interface JoinOptions { name?: string; password?: string; playerCount?: number; slot?: number; }
 
@@ -132,12 +133,13 @@ export class GudongRoom extends Room<GudongState> {
     if (!password || /\s/.test(password)) throw new Error('密碼不可為空,且不能包含空白字元');
     if (isReservedName(name)) throw new Error('這個暱稱保留給 AI 玩家,請換一個');
     if (password !== this.password) throw new Error('密碼錯誤');
-    // 同名座位:仍連線中 → 拒絕;已斷線(灰色)→ 允許接管(重整/重連後備,即使遊戲已開始)
+    // 暱稱全伺服器唯一:已在別的房間使用中 → 拒絕
+    const owner = nameOwner(name);
+    if (owner && owner.roomId !== this.roomId) throw new Error(`暱稱已在房間 ${owner.slot} 使用中,請換一個`);
+    // 同名座位(不論是否仍顯示在線)→ 允許以「暱稱+密碼」強制接管,繼承座位與接下來的行動。
+    // 伺服器常偵測不到手機切 App/換網路後殘留的舊連線(或舊分頁仍開著),若拒絕就會永遠回不來。
     const dup = [...this.state.names.entries()].find(([, nm]) => nm === name)?.[0];
-    if (dup) {
-      if (this.state.connected.get(dup) !== false) throw new Error('暱稱已被使用,請換一個');
-      return true;
-    }
+    if (dup) return true;
     if (this.started) throw new Error('遊戲已開始,無法加入'); // 全新玩家不能中途加入
     return true;
   }
@@ -145,9 +147,16 @@ export class GudongRoom extends Room<GudongState> {
   onJoin(client: Client, options: JoinOptions) {
     this.touch();
     const name = options.name || '';
-    // 接管同名的斷線座位(重整/重連後備)→ 還原原座位、身份與私訊紀錄
-    const reclaim = [...this.state.names.entries()].find(([seat, nm]) => nm === name && this.state.connected.get(seat) === false)?.[0];
+    // 接管同名座位(重整/重連/換裝置)→ 還原原座位、身份與私訊紀錄
+    const reclaim = [...this.state.names.entries()].find(([seat, nm]) => nm === name && !this.botSeats.has(seat))?.[0];
     if (reclaim) {
+      // 舊連線若還掛著 → 先解除對應再踢掉,其 onLeave 找不到座位就不會把座位標成離線
+      const oldSid = this.seatToSession(reclaim);
+      if (oldSid) {
+        this.sessionToSeat.delete(oldSid);
+        const old = this.clients.find((cl) => cl.sessionId === oldSid);
+        if (old) { old.send('kicked', {}); old.leave(); }
+      }
       this.sessionToSeat.set(client.sessionId, reclaim);
       this.state.connected.set(reclaim, true);
       if (this.engine) this.engine.public.connected[reclaim] = true;
@@ -156,6 +165,7 @@ export class GudongRoom extends Room<GudongState> {
       this.updateMetadata();
       return;
     }
+    if (!claimName(name, this.roomId, this.slot)) throw new Error('暱稱已在其他房間使用中,請換一個'); // onAuth 後的極短競態
     const seat = `seat${this.nextSeatNum++}`;
     this.sessionToSeat.set(client.sessionId, seat);
     this.privateLog[seat] = [];
@@ -465,6 +475,8 @@ export class GudongRoom extends Room<GudongState> {
       // 還沒開局:直接釋放座位,讓別人能補進
       const i = this.state.seatOrder.indexOf(seat);
       if (i >= 0) this.state.seatOrder.splice(i, 1);
+      const nm = this.state.names.get(seat);
+      if (nm) releaseName(nm, this.roomId);
       this.state.names.delete(seat);
       this.state.connected.delete(seat);
       delete this.privateLog[seat];
@@ -506,6 +518,7 @@ export class GudongRoom extends Room<GudongState> {
   }
 
   onDispose() {
+    releaseRoom(this.roomId);
     if (this.idleTimer) clearTimeout(this.idleTimer);
     if (this.endTimer) clearTimeout(this.endTimer);
   }

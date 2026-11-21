@@ -75,6 +75,7 @@ const RESULT_TEXT: Record<string, string> = { REAL: '真品', FAKE: '贗品', UN
 export default function App() {
   const clientRef = useRef<Client | null>(null);
   const roomRef = useRef<Room | null>(null);
+  const leavingRef = useRef(false); // 主動離開/被關房/被接管 → 斷線時不自動重連
   const [snap, setSnap] = useState<Snap | null>(null);
   const [mySeat, setMySeat] = useState('');
   const [isHost, setIsHost] = useState(false);
@@ -112,7 +113,20 @@ export default function App() {
     room.onMessage('seat', (m: any) => { setMySeat(m.seatId); setIsHost(m.isHost); });
     room.onMessage('mychips', (n: any) => setMyChips(Number(n) || 0));
     room.onMessage('error', (m: any) => flashError(m.message));
+    // 同暱稱在別處(新分頁/另一台裝置)登入接管了這個座位 → 這個分頁退回大廳,且不再自動重連(避免兩邊互搶)
+    room.onMessage('kicked', () => {
+      leavingRef.current = true;
+      sessionStorage.removeItem('gudong_active');
+      alert('你的暱稱已在其他分頁或裝置登入,這裡的連線已中斷。');
+      location.reload();
+    });
+    // 非預期斷線(換網路、鎖屏、切 App)→ 重新載入,由啟動流程用暱稱+密碼自動接回原座位
+    room.onLeave(() => {
+      if (leavingRef.current || !sessionStorage.getItem('gudong_active')) return;
+      location.reload();
+    });
     room.onMessage('room_closed', (m: any) => {
+      leavingRef.current = true;
       sessionStorage.removeItem('gudong_active');
       const msg = m?.reason === 'timeout' ? '房間閒置過久,已自動關閉。'
         : m?.reason === 'ended' ? '遊戲已結束,房間已關閉。'
@@ -153,8 +167,7 @@ export default function App() {
     if (!(active && nm && pw)) { setConnecting(false); return; }
     let cancelled = false;
     (async () => {
-      // 重整後馬上重進時,伺服器可能還沒偵測到舊連線關閉,會暫時回「暱稱已被使用」;
-      // 這是同一個人在接管自己的座位,持續重試到舊連線被判定離線即可成功。
+      // 同暱稱+密碼會直接接管原座位;重試只是為了撐過短暫的網路/伺服器不可用。
       for (let i = 0; i < 20 && !cancelled; i++) {
         try {
           const room = await client.joinOrCreate('gudong', { name: nm, password: pw, slot: sl, playerCount: 8 });
@@ -222,6 +235,7 @@ export default function App() {
   function leaveGame() {
     const msg = isHost ? '你是房主，離開將結束整局並關閉房間，確定?' : '確定離開遊戲?';
     if (!confirm(msg)) return;
+    leavingRef.current = true;
     sessionStorage.removeItem('gudong_active');
     roomRef.current?.leave(true);
     location.reload();
@@ -237,7 +251,7 @@ export default function App() {
         {showChars && <AICharactersModal onClose={() => setShowChars(false)} />}
         <h1>古董局中局</h1>
         <div style={{ background: '#fff3d6', border: '1px solid #e6c14d', color: '#7a5b00', borderRadius: 8, padding: '10px 12px', margin: '8px 0', fontSize: 14 }}>
-          📌 重新整理、切到 LINE、鎖屏都沒關係——回來會用你的<b>暱稱+密碼自動接回原座位</b>(可能需等幾秒讓伺服器確認舊連線已離線;若沒馬上回到、停在「房間準備」畫面，<b>再重新整理一次</b>即可)。請盡量別<b>完全關閉分頁</b>。房主離開會結束整局。
+          📌 重新整理、切到 LINE、鎖屏都沒關係——回來會用你的<b>暱稱+密碼自動接回原座位</b>；就算分頁被關掉、換了手機，只要輸入<b>相同暱稱+密碼</b>就會直接接管原座位與接下來的行動(舊的分頁會被登出)。暱稱在全伺服器不可重複。房主離開會結束整局。
         </div>
         <p style={{ color: '#888' }}>選一個房間，設定密碼與人數即成為房主；其餘人選同一房間、輸入相同密碼加入。</p>
         <Field label="暱稱"><input value={name} onChange={(e) => setName(e.target.value)} placeholder="不可空白或含空格" /></Field>
@@ -488,12 +502,12 @@ export default function App() {
           <p style={{ color: '#a11' }}>房間將在 {String(Math.floor((endCountdown ?? 300) / 60)).padStart(2, '0')}:{String((endCountdown ?? 300) % 60).padStart(2, '0')} 後自動關閉(回到大廳成為空房)。</p>
           {isHost ? (
             <>
-              <button style={btn} onClick={() => { sessionStorage.removeItem('gudong_active'); roomRef.current?.leave(true); location.reload(); }}>關閉房間並回到大廳</button>
+              <button style={btn} onClick={() => { leavingRef.current = true; sessionStorage.removeItem('gudong_active'); roomRef.current?.leave(true); location.reload(); }}>關閉房間並回到大廳</button>
               <div style={{ color: '#888', fontSize: 12 }}>你是房主，離開會<b>立即關閉房間</b>並釋放房號(其他人會一起回到大廳)。</div>
             </>
           ) : (
             <>
-              <button style={btn} onClick={() => { sessionStorage.removeItem('gudong_active'); location.reload(); }}>回到大廳</button>
+              <button style={btn} onClick={() => { leavingRef.current = true; sessionStorage.removeItem('gudong_active'); location.reload(); }}>回到大廳</button>
               <div style={{ color: '#888', fontSize: 12 }}>房主離開或倒數結束後，房間就會關閉。</div>
             </>
           )}
